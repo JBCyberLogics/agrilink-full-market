@@ -1,0 +1,653 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap');
+@tailwind base;
+@tailwind utilities;
+
+/* ------------------------------------------------------------------ theme
+   Single source of truth for the app's warm light and deep-green dark
+   palettes. Every value here is an rgb triplet consumed by Tailwind via
+   tailwind.config.js (`--ag-*` tokens), including alpha variants.
+
+   The .dark class is toggled on <html> by:
+   • the inline boot script in frontend/index.html (runs before first paint
+     when a saved preference exists), and
+   • the shared ThemeProvider (frontend/src/features/theme/) on toggle.
+*/
+@layer base {
+  :root {
+    /* surfaces */
+    --ag-paper: 255 254 249;
+    --ag-paper-soft: 248 248 242;
+    --ag-soft: 240 242 233;
+    --ag-soft-strong: 225 230 218;
+    --ag-line: 224 229 220;
+    --ag-line-strong: 199 210 197;
+
+    /* text / icon steps (was neutral-900 … neutral-300 text) */
+    --ag-ink: 24 35 29;
+    --ag-ink-2: 43 57 47;
+    --ag-ink-3: 62 75 65;
+    --ag-ink-4: 83 96 85;
+    --ag-muted: 103 115 103;
+    --ag-muted-2: 143 153 140;
+    --ag-faint: 195 203 190;
+
+    /* brand text shades (readable in dark mode) */
+    --ag-brand: 36 95 61;
+    --ag-brand-deep: 23 69 45;
+    --ag-brand-soft: 232 240 230;
+    --ag-brand-amber: 217 154 53;
+    --ag-brand-amber-deep: 151 96 24;
+    --ag-brand-amber-soft: 250 241 222;
+
+    /* state washes: red (danger) / green (ok) / blue (info) */
+    --ag-danger: 220 38 38;           /* red-600/500/700 text */
+    --ag-danger-wash: 254 242 242;    /* red-50 chip background */
+    --ag-danger-line: 252 165 165;    /* red-200/300 borders & rings */
+    --ag-ok: 21 128 61;               /* green-700 text */
+    --ag-ok-strong: 22 101 52;        /* green-800 strong text */
+    --ag-ok-wash: 240 253 244;        /* green-50 chip background */
+    --ag-ok-line: 187 247 208;        /* green-200 border */
+    --ag-info: 29 78 216;             /* blue-700 text */
+    --ag-info-wash: 219 234 254;      /* blue-50 chip background */
+
+    /* farmer/buyer dashboard system (farmer-* tokens) */
+    --ag-fbrand: 36 91 63;
+    --ag-fsurface: 235 241 231;
+    --ag-fpage: 246 247 239;
+    --ag-fink: 24 35 29;
+    --ag-fmuted: 98 111 99;
+    --ag-fline: 223 228 217;
+    --ag-fsuccess: 32 112 67;
+    --ag-fwarning: 140 91 21;
+    --ag-fdanger: 166 54 40;
+
+    /* keyboard focus: inner ring matches the surface so the green ring
+       is always the visible part of the outline */
+    --ag-focus-inner: 255 255 255;
+  }
+
+  .dark {
+    /* slightly green-tinted charcoal — dark neutrals, never pure black */
+    --ag-paper: 26 32 27;             /* #1A201B cards & raised surfaces */
+    --ag-paper-soft: 18 24 20;        /* #121814 page background */
+    --ag-soft: 30 38 32;              /* #1E2620 skeleton fills, icon wells */
+    --ag-soft-strong: 41 51 43;       /* #29332B stronger wells */
+    --ag-line: 45 56 48;              /* #2D3830 default borders */
+    --ag-line-strong: 63 78 66;       /* #3F4E42 strong borders */
+
+    --ag-ink: 241 244 241;            /* #F1F4F1 primary text */
+    --ag-ink-2: 225 231 226;          /* #E1E7E2 */
+    --ag-ink-3: 205 213 206;          /* #CDD5CE */
+    --ag-ink-4: 184 194 185;          /* #B8C2B9 */
+    --ag-muted: 154 165 156;          /* #9AA59C secondary text ≈6:1 */
+    --ag-muted-2: 131 140 132;        /* icons & placeholders ≈4:1 */
+    --ag-faint: 128 138 129;          /* decorative chevrons etc. */
+
+    --ag-brand: 133 194 144;
+    --ag-brand-deep: 165 213 173;
+    --ag-brand-soft: 33 53 39;
+    --ag-brand-amber: 235 183 98;
+    --ag-brand-amber-deep: 245 203 135;
+    --ag-brand-amber-soft: 57 47 28;
+
+    --ag-danger: 249 113 96;          /* #F97160 ≈5.5:1 on washes */
+    --ag-danger-wash: 46 20 18;       /* #2E1412 */
+    --ag-danger-line: 116 44 38;      /* #742C26 */
+    --ag-ok: 110 210 141;             /* #6ED28D */
+    --ag-ok-strong: 141 227 165;      /* #8DE3A5 */
+    --ag-ok-wash: 18 44 28;           /* #122C1C */
+    --ag-ok-line: 47 92 61;           /* #2F5C3D */
+    --ag-info: 147 197 253;           /* #93C5FD */
+    --ag-info-wash: 22 38 61;         /* #16263D */
+
+    --ag-fbrand: 133 194 144;
+    --ag-fsurface: 32 42 35;
+    --ag-fpage: 16 21 18;
+    --ag-fink: 238 243 239;
+    --ag-fmuted: 158 170 159;         /* #9EAA9F */
+    --ag-fline: 45 56 48;
+    --ag-fsuccess: 116 220 152;       /* #74DC98 */
+    --ag-fwarning: 232 181 92;        /* #E8B55C */
+    --ag-fdanger: 248 138 118;        /* #F88A76 */
+
+    --ag-focus-inner: 18 24 20;       /* blends with the dark surface */
+  }
+
+  html {
+    @apply antialiased;
+    color-scheme: light;
+  }
+  .dark { color-scheme: dark; }
+  body {
+    @apply bg-paper-soft text-ink font-sans;
+    min-width: 320px;
+    font-feature-settings: 'ss01' on;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: rgb(var(--ag-brand-soft));
+    color: rgb(var(--ag-brand-deep));
+  }
+  .dark ::selection {
+    background: rgb(var(--ag-brand-soft));
+    color: rgb(var(--ag-brand-deep));
+  }
+  /* Visible keyboard focus everywhere (WCAG 2.4.7/2.4.13) — token-driven
+     so the ring stays visible on both the light and dark surfaces */
+  :focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px rgb(var(--ag-focus-inner)),
+      0 0 0 4px rgb(var(--ag-brand) / .7);
+    border-radius: 8px;
+  }
+}
+
+@layer utilities {
+  /* Horizontal scrollers without a visible track (category pills) */
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ----------------------------------------------------------------- auth
+   Orbiting badge ornament (AGRILINK-AUTH-UI-REVAMP-001).
+
+   The --orbit angle is interpolated via @property and consumed with
+   trig functions inside the transform, so each badge travels its own
+   ellipse (rx/ry around the auth card) while the ICON STAYS UPRIGHT —
+   the transform is a pure translation. Only the transform is animated:
+   smear-free, GPU-composited, zero layout work, no scrollbar effects
+   (the layer is overflow-hidden, the card paints above it).
+
+   Without @property/trig support (or under prefers-reduced-motion) the
+   animation cannot interpolate: badges rest at their phased positions as
+   a static ring — decorative, harmless, never broken. */
+@property --orbit {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.auth-orbit {
+  /* orbit radii: comfortably wider than half the card, flattened
+     vertically by viewport height so badges stay near the card edges */
+  --orbit-rx: clamp(15rem, 26vw, 21rem);
+  --orbit-ry: clamp(19rem, 44vh, 27rem);
+}
+
+@media (max-width: 640px) {
+  /* phones: tighter ring around the single-column card */
+  .auth-orbit {
+    --orbit-rx: 58vw;
+    --orbit-ry: min(46vh, 22rem);
+  }
+}
+
+.auth-orbit-dot {
+  --orbit-delay: 0s;
+  animation: auth-orbit 32s linear infinite;
+  animation-delay: var(--orbit-delay);
+  /* resting pose = phase position (also what reduced-motion shows) */
+  transform:
+    translate(-50%, -50%)
+    translate3d(
+      calc(cos(calc(0deg + var(--phase, 0deg))) * var(--orbit-rx)),
+      calc(sin(calc(0deg + var(--phase, 0deg))) * var(--orbit-ry)),
+      0
+    );
+  will-change: transform;
+}
+
+@keyframes auth-orbit {
+  from {
+    --orbit: 0deg;
+  }
+  to {
+    --orbit: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-orbit-dot {
+    animation: none;
+  }
+}
+
+
+/* Hide Google Translate's own banner/tooltips — we use our own language picker */
+.goog-te-banner-frame, .skiptranslate iframe, #goog-gt-tt, .goog-te-balloon-frame { display: none !important; }
+body { top: 0 !important; }
+.goog-text-highlight { background: none !important; box-shadow: none !important; }
+
+/* ---------------------------------------------------------------- premium system
+   Warm field-paper surfaces, deep harvest green and restrained brass bring
+   the existing AgriLink flows into one consistent, role-aware interface. */
+:root {
+  --ag-radius-card: 1.125rem;
+  --ag-shadow-card: 0 10px 30px -22px rgb(31 52 34 / 0.28), 0 1px 2px rgb(31 52 34 / 0.035);
+  --ag-shadow-float: 0 24px 56px -32px rgb(24 50 32 / 0.35);
+  --ag-ease: cubic-bezier(.2, .75, .25, 1);
+}
+
+body {
+  background-image: radial-gradient(ellipse at 50% 0%, rgb(232 240 230 / .34), transparent 44rem);
+  background-attachment: fixed;
+}
+
+button, a, input, select, textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:not(:disabled), a[href] {
+  transition-timing-function: var(--ag-ease);
+}
+
+main input:not([type='checkbox']):not([type='radio']),
+main select,
+main textarea {
+  border-radius: .8rem;
+}
+
+main input:not([type='checkbox']):not([type='radio']):focus,
+main select:focus,
+main textarea:focus {
+  box-shadow: 0 0 0 3px rgb(var(--ag-brand) / .12);
+}
+
+/* Dashboard chrome is shared by farmer and buyer shells. */
+.agri-dashboard-shell {
+  background: rgb(var(--ag-fpage));
+}
+
+.agri-dashboard-sidebar {
+  background: rgb(var(--ag-paper) / .96);
+  border-color: rgb(var(--ag-fline) / .82);
+  box-shadow: 8px 0 28px -30px rgb(28 51 35 / .35);
+}
+
+.agri-dashboard-sidebar > div:first-child > span:first-child {
+  border-radius: 13px;
+  box-shadow: 0 7px 16px -9px rgb(23 69 45 / .65);
+}
+
+.agri-dashboard-sidebar nav li button {
+  min-height: 42px;
+  border-radius: 11px;
+  transition: background-color .18s var(--ag-ease), color .18s var(--ag-ease), transform .18s var(--ag-ease);
+}
+
+.agri-dashboard-sidebar nav li button:hover {
+  transform: translateX(2px);
+}
+
+.agri-dashboard-sidebar nav li button[aria-current='page'] {
+  position: relative;
+  background: rgb(var(--ag-fsurface));
+  color: rgb(var(--ag-fbrand));
+  font-weight: 700;
+}
+
+.agri-dashboard-sidebar nav li button[aria-current='page']::before {
+  position: absolute;
+  left: 0;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 0 4px 4px 0;
+  background: rgb(var(--ag-fbrand));
+  content: '';
+}
+
+.agri-dashboard-header {
+  background: rgb(var(--ag-fpage));
+  border-color: rgb(var(--ag-fline) / .75);
+}
+
+.agri-dashboard-header h1 {
+  letter-spacing: -.035em;
+}
+
+.agri-dashboard-content {
+  max-width: 1440px;
+  margin-inline: auto;
+}
+
+.agri-dashboard-content > section,
+.agri-dashboard-content section.rounded-xl.border.bg-paper,
+.agri-dashboard-content > div > section.rounded-xl.border.bg-paper {
+  border-radius: var(--ag-radius-card);
+  border-color: rgb(var(--ag-fline) / .82);
+  box-shadow: var(--ag-shadow-card);
+}
+
+.agri-dashboard-content h2,
+.agri-dashboard-content h3 {
+  letter-spacing: -.02em;
+}
+
+.agri-dashboard-content table thead {
+  background: rgb(var(--ag-fsurface) / .66);
+}
+
+.agri-dashboard-shell .bg-white,
+.agri-admin-shell .bg-white {
+  background-color: rgb(var(--ag-paper));
+}
+
+.agri-dashboard-shell .bg-gray-50,
+.agri-admin-shell .bg-gray-50 {
+  background-color: rgb(var(--ag-fsurface));
+}
+
+.agri-dashboard-shell [class*='border-gray-'],
+.agri-admin-shell [class*='border-gray-'] {
+  border-color: rgb(var(--ag-fline));
+}
+
+.agri-dashboard-shell .text-gray-900,
+.agri-dashboard-shell .text-gray-800,
+.agri-dashboard-shell .text-gray-700,
+.agri-admin-shell .text-gray-900,
+.agri-admin-shell .text-gray-800,
+.agri-admin-shell .text-gray-700 {
+  color: rgb(var(--ag-fink));
+}
+
+.agri-dashboard-shell .text-gray-600,
+.agri-dashboard-shell .text-gray-500,
+.agri-admin-shell .text-gray-600,
+.agri-admin-shell .text-gray-500 {
+  color: rgb(var(--ag-fmuted));
+}
+
+/* Consistent card character across AI tools, forms, profile and support
+   pages, while leaving purpose-built marketplace product cards distinct. */
+.agri-app-frame main section.rounded-xl.border.bg-paper,
+.agri-app-frame main section.rounded-2xl.border.bg-paper {
+  border-radius: var(--ag-radius-card);
+  border-color: rgb(var(--ag-line) / .88);
+  box-shadow: var(--ag-shadow-card);
+}
+
+.agri-app-frame main section.rounded-xl.border.bg-paper > h2,
+.agri-app-frame main section.rounded-2xl.border.bg-paper > h2 {
+  letter-spacing: -.025em;
+}
+
+.agri-admin-shell aside {
+  background: rgb(var(--ag-paper));
+  border-color: rgb(var(--ag-fline) / .82);
+}
+
+.agri-admin-shell aside nav button {
+  min-height: 42px;
+  border-radius: 11px;
+  transition: background-color .18s var(--ag-ease), color .18s var(--ag-ease);
+}
+
+.agri-admin-shell aside nav button[aria-current='page'] {
+  font-weight: 700;
+}
+
+.agri-admin-content > div > section,
+.agri-admin-content section.rounded-2xl.border.bg-paper {
+  border-radius: var(--ag-radius-card);
+  border-color: rgb(var(--ag-fline) / .82);
+  box-shadow: var(--ag-shadow-card);
+}
+
+.agri-admin-content h1,
+.agri-admin-content h2,
+.agri-admin-content h3 {
+  letter-spacing: -.025em;
+}
+
+/* Public navigation stays pinned and legible above page content. */
+.agri-public-navbar {
+  border-color: rgb(var(--ag-line) / .82);
+  box-shadow: 0 4px 22px -20px rgb(23 45 28 / .5);
+}
+
+.agri-public-navbar nav > ul button[aria-current='page'] {
+  font-weight: 700;
+}
+
+.agri-hero {
+  isolation: isolate;
+}
+
+.agri-hero__slide {
+  opacity: 0;
+  transition: opacity 1.2s cubic-bezier(.22, .72, .2, 1);
+}
+
+.agri-hero__slide.is-visible {
+  opacity: 1;
+}
+
+.agri-hero__scrim {
+  background:
+    linear-gradient(90deg, rgb(10 29 19 / .91) 0%, rgb(10 29 19 / .76) 38%, rgb(10 29 19 / .38) 72%, rgb(10 29 19 / .22) 100%),
+    linear-gradient(0deg, rgb(10 29 19 / .44), transparent 48%);
+}
+
+.agri-chat-teaser {
+  position: fixed;
+  right: 24px;
+  bottom: 106px;
+  z-index: 59;
+  display: flex;
+  width: min(21rem, calc(100vw - 2rem));
+  align-items: center;
+  gap: 11px;
+  padding: 13px 12px;
+  border: 1px solid rgb(255 255 255 / .18);
+  border-radius: 17px;
+  background: #173c2a;
+  color: #fff;
+  box-shadow: 0 14px 38px -18px rgb(10 28 16 / .65);
+  animation: agri-chat-teaser-in 260ms cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.agri-chat-teaser::after {
+  position: absolute;
+  right: 23px;
+  bottom: -6px;
+  width: 11px;
+  height: 11px;
+  border-right: 1px solid rgb(255 255 255 / .18);
+  border-bottom: 1px solid rgb(255 255 255 / .18);
+  background: #173c2a;
+  content: '';
+  transform: rotate(45deg);
+}
+
+.agri-chat-teaser__icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 12px;
+  background: #e8bd72;
+  color: #193d2b;
+}
+
+.agri-chat-teaser__copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.agri-chat-teaser__copy strong { font-size: 13px; }
+.agri-chat-teaser__copy span { color: rgb(255 255 255 / .76); }
+
+.agri-chat-teaser__dismiss {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  margin-left: auto;
+  place-items: center;
+  border-radius: 9px;
+  color: rgb(255 255 255 / .78);
+}
+
+.agri-chat-teaser__dismiss:hover { background: rgb(255 255 255 / .12); color: #fff; }
+.agri-chat-teaser__dismiss:focus-visible { outline: 2px solid #e8bd72; outline-offset: 2px; }
+
+@keyframes agri-chat-teaser-in {
+  from { opacity: 0; transform: translateY(8px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Botpress supplies and manages the persistent launcher and chat panel. */
+.bpFab { animation: agri-chat-launcher-pop 380ms cubic-bezier(.2, .8, .2, 1); }
+
+.bpFab {
+  position: relative !important;
+  box-sizing: border-box !important;
+  width: 60px !important;
+  min-width: 60px !important;
+  height: 60px !important;
+  min-height: 60px !important;
+  overflow: hidden !important;
+  border: 2px solid #216b3a !important;
+  border-radius: 50% !important;
+  background: #f1f7f0 !important;
+  box-shadow: 0 8px 24px -8px rgb(24 76 42 / .48), 0 0 0 4px rgb(255 255 255 / .88) !important;
+  color: #216b3a !important;
+  transition: transform 180ms ease, box-shadow 180ms ease !important;
+}
+
+.bpFab > * { opacity: 0 !important; }
+
+.bpFab::after {
+  position: absolute;
+  inset: 7px;
+  background: url('/images/farmer-chat-icon.svg') center / contain no-repeat;
+  content: '';
+  pointer-events: none;
+}
+
+.bpFab:hover {
+  transform: translateY(-2px) !important;
+  box-shadow: 0 12px 28px -8px rgb(24 76 42 / .56), 0 0 0 4px rgb(255 255 255 / .92) !important;
+}
+
+.bpFab:focus-visible {
+  outline: 3px solid #e8bd72 !important;
+  outline-offset: 4px !important;
+}
+
+.bpWebchat {
+  box-sizing: border-box !important;
+  width: min(330px, calc(100vw - 28px)) !important;
+  height: min(430px, calc(100vh - 128px)) !important;
+  max-height: min(430px, calc(100vh - 128px)) !important;
+  overflow: hidden !important;
+  border: 1px solid rgb(32 83 49 / .16) !important;
+  border-radius: 18px !important;
+  box-shadow: 0 20px 52px -22px rgb(13 39 21 / .52) !important;
+}
+
+@supports (height: 100dvh) {
+  .bpWebchat {
+    height: min(430px, calc(100dvh - 128px)) !important;
+    max-height: min(430px, calc(100dvh - 128px)) !important;
+  }
+}
+
+@keyframes agri-chat-launcher-pop {
+  from { opacity: 0; transform: translateY(10px) scale(.78); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (max-width: 640px) {
+  .agri-chat-teaser { right: 16px; bottom: 98px; }
+  .bpWebchat {
+    width: min(300px, calc(100vw - 24px)) !important;
+    height: min(380px, calc(100vh - 116px)) !important;
+    max-height: min(380px, calc(100vh - 116px)) !important;
+  }
+}
+
+@supports (height: 100dvh) {
+  @media (max-width: 640px) {
+    .bpWebchat {
+      height: min(380px, calc(100dvh - 116px)) !important;
+      max-height: min(380px, calc(100dvh - 116px)) !important;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agri-hero__slide,
+  .agri-chat-teaser,
+  .bpFab {
+    transition: none;
+    animation: none;
+  }
+}
+
+#marketplace article[role='button'] {
+  border-radius: 1.1rem;
+  border-color: rgb(var(--ag-line) / .9);
+  box-shadow: var(--ag-shadow-card);
+  transition: transform .22s var(--ag-ease), box-shadow .22s var(--ag-ease), border-color .22s var(--ag-ease);
+}
+
+#marketplace article[role='button']:hover {
+  transform: translateY(-3px);
+  border-color: rgb(var(--ag-brand) / .28);
+  box-shadow: var(--ag-shadow-float);
+}
+
+.agri-drawer {
+  background: rgb(var(--ag-paper));
+  box-shadow: 24px 0 60px -28px rgb(10 28 16 / .42);
+}
+
+@media (max-width: 1023px) {
+  .agri-dashboard-header {
+    padding: 20px 20px 18px;
+  }
+
+  .agri-dashboard-content {
+    padding: 22px 20px;
+  }
+}
+
+@media (max-width: 640px) {
+  body {
+    background-image: none;
+  }
+
+  .agri-dashboard-header {
+    padding: 16px 16px 14px;
+  }
+
+  .agri-dashboard-content {
+    padding: 18px 16px 28px;
+  }
+
+  .agri-dashboard-content section.rounded-xl.border.bg-paper,
+  .agri-dashboard-content > div > section.rounded-xl.border.bg-paper {
+    padding: 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

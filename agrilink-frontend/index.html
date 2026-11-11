@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en" class="scroll-smooth">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agrilink — Farm-Fresh Marketplace</title>
+    <meta
+      name="description"
+      content="Agrilink directly connects farmers and buyers. Fresh produce, fair prices, zero middlemen."
+    />
+    <meta name="theme-color" content="#2E7D32" />
+    <script>
+      /* Theme boot (AGRILINK-FAQ-GLOBAL-THEME-001) — applies the saved
+         user preference (or the OS color scheme) BEFORE first paint so a
+         dark mode never flashes light on refresh. The shared ThemeProvider
+         (src/features/theme) adopts this same state after mount; the key
+         constant is duplicated here by necessity (no bundler yet). */
+      (function () {
+        var theme = 'light'
+        try {
+          var saved = localStorage.getItem('agrilink_theme')
+          if (saved === 'light' || saved === 'dark') theme = saved
+          else theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        } catch (e) {
+          /* storage / matchMedia unavailable — stay light */
+        }
+        var root = document.documentElement
+        root.classList.toggle('dark', theme === 'dark')
+        root.style.colorScheme = theme
+        try {
+          document
+            .querySelector('meta[name="theme-color"]')
+            .setAttribute('content', theme === 'dark' ? '#121814' : '#2E7D32')
+        } catch (e) {}
+      })()
+    </script>
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="/images/icon.svg"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.botpress.cloud/webchat/v5.0/inject.js"></script>
+    <script>
+      window.__AGRILINK_BOTPRESS_READY__ = false
+      if (window.botpress && typeof window.botpress.on === 'function') {
+        window.botpress.on('webchat:initialized', function () {
+          window.__AGRILINK_BOTPRESS_READY__ = true
+          window.dispatchEvent(new Event('agrilink-botpress-ready'))
+        })
+      }
+    </script>
+    <script src="https://files.bpcontent.cloud/2026/11/06/18/20261106182509-HTZDYGST.js" defer></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/app/main.jsx"></script>
+  </body>
+</html>

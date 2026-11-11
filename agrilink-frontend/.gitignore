@@ -1,0 +1,18 @@
+node_modules
+dist
+.DS_Store
+*.local
+
+# Local environment files. Keep the empty template tracked, never real secrets.
+.env
+.env.*
+!.env.example
+docs/NVIDIA_AI_CONFIGURATION.local.txt
+
+# secrets — never commit
+server/.env
+atlas-credentials.env
+server/uploads/
+
+.vite/
+*.log
