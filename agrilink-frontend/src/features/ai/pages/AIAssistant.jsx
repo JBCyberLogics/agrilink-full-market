@@ -108,7 +108,7 @@ export default function AIAssistant() {
           </p>
         )}
         <p className="mt-3 text-[11px] text-farmer-muted leading-relaxed">
-          AI responses require the configured backend proxy. NVIDIA credentials remain server-side.
+          AI responses require the configured backend proxy. AI provider credentials remain server-side.
         </p>
       </footer>
     </div>

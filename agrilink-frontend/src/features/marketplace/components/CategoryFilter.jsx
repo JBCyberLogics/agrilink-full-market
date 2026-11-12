@@ -1,4 +1,4 @@
-import { LayoutGrid, Wheat, Carrot, Tractor } from 'lucide-react'
+import { LayoutGrid, Wheat, Carrot, Tractor, Sprout } from 'lucide-react'
 
 
 /* Pill style catalog for each category state */
@@ -19,15 +19,15 @@ const ICONS = {
 /**
  * Category filter pills — horizontally scrollable on mobile, wrapped on desktop.
  */
-export default function CategoryFilter({ active, onChange, counts }) {
+export default function CategoryFilter({ active, onChange, counts, categories = [] }) {
   return (
     <div
       role="tablist"
       aria-label="Filter produce by category"
       className="scrollbar-none -mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0"
     >
-      {Object.keys(ICONS).map((cat) => {
-        const Icon = ICONS[cat]
+      {categories.map((cat) => {
+        const Icon = ICONS[cat] ?? Sprout
         const isActive = active === cat
         const count = counts[cat] ?? 0
         return (

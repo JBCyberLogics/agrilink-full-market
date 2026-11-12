@@ -102,6 +102,7 @@ export const normalizeProduct = (p = {}) => {
     imageUrl: firstImage(p),
     images: Array.isArray(p.images) ? p.images : [],
     farmer: seller.fullName ?? seller.name ?? seller.shopName ?? null,
+    sellerContact: p.farmer?.contactInformation ?? p.seller?.contactInformation ?? null,
     sellerVerified: seller.verified === true || seller.isVerified === true,
     location: resolveLocation(p, seller) || null,
     raw: p,

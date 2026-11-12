@@ -152,9 +152,15 @@ describe('AuthModal — new presentation, preserved behavior', () => {
     expect(onAuth).not.toHaveBeenCalled()
   })
 
-  it('still pre-selects the account role on a 403 role-gate rejection', async () => {
+  it('shows a generic login error without changing the selected role on a role mismatch', async () => {
     const onAuth = vi.fn()
-    authApi.login.mockRejectedValue({ status: 403, error: 'This account is registered as a Farmer.', field: 'role', accountRole: 'Farmer' })
+    authApi.login.mockRejectedValue({
+      status: 401,
+      code: 'ACCOUNT_ROLE_MISMATCH',
+      error: 'This account is registered as a Farmer.',
+      field: 'role',
+      accountRole: 'Farmer',
+    })
 
     render(<AuthModal open={true} onAuth={onAuth} onClose={vi.fn()} />)
     fireEvent.change(screen.getByLabelText(/email address/i, { selector: 'input' }), {
@@ -166,8 +172,36 @@ describe('AuthModal — new presentation, preserved behavior', () => {
     fireEvent.click(screen.getByRole('radio', { name: /buyer/i }))
 
     fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
-    await screen.findByText(/registered as a farmer/i)
-    expect(screen.getByRole('radio', { name: /farmer/i }).getAttribute('aria-checked')).toBe('true')
+    await screen.findByText('Unable to sign in with those credentials. Please check your details and try again.')
+    expect(screen.queryByText(/registered as a farmer/i)).toBeNull()
+    expect(screen.getByRole('radio', { name: /buyer/i }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('radio', { name: /farmer/i }).getAttribute('aria-checked')).toBe('false')
+    expect(onAuth).not.toHaveBeenCalled()
+  })
+
+  it('hides legacy role-specific 403 responses from the marketplace login UI', async () => {
+    const onAuth = vi.fn()
+    authApi.login.mockRejectedValue({
+      status: 403,
+      field: 'role',
+      code: 'LEGACY_ROLE_REJECTION',
+      error: 'This account is registered as a Farmer.',
+      accountRole: 'Farmer',
+    })
+
+    render(<AuthModal open={true} onAuth={onAuth} onClose={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText(/email address/i, { selector: 'input' }), {
+      target: { value: 'farmer@example.com' },
+    })
+    fireEvent.change(screen.getByLabelText(/^password$/i, { selector: 'input' }), {
+      target: { value: 'secure-pass' },
+    })
+    fireEvent.click(screen.getByRole('radio', { name: /buyer/i }))
+    fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
+
+    await screen.findByText('Unable to sign in with those credentials. Please check your details and try again.')
+    expect(screen.queryByText(/registered as a farmer/i)).toBeNull()
+    expect(screen.queryByText(/accountRole/i)).toBeNull()
     expect(onAuth).not.toHaveBeenCalled()
   })
 

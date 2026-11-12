@@ -24,12 +24,14 @@ export default function AdminLogin({ onAuth, onBackToShop, notice }) {
       const user = await login({ email: email.trim(), password })
       if (user?.role !== 'Admin') {
         tokens.clear()
-        setError('Access denied. This account does not have administrator privileges.')
+        setError('Unable to sign in with those credentials. Please check your details and try again.')
         return
       }
       onAuth(user)
     } catch (err) {
-      setError(err?.error || err?.message || 'Sign in failed. Check your credentials or the server.')
+      setError(err?.status === 401 || err?.code === 'INVALID_CREDENTIALS'
+        ? 'Unable to sign in with those credentials. Please check your details and try again.'
+        : err?.error || err?.message || 'Unable to sign in right now. Please try again.')
     } finally {
       setBusy(false)
     }

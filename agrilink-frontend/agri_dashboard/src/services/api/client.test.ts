@@ -13,6 +13,13 @@ describe('AdminApiClient generic transport', () => {
     expect(fetcher).toHaveBeenCalledWith('https://admin.example.invalid/api/overview', expect.objectContaining({ credentials: 'same-origin' }));
   });
 
+  it('invokes the fetch implementation with the global receiver', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ ok: true }));
+    const client = new AdminApiClient({ baseUrl: 'https://admin.example.invalid/api', fetcher });
+    await client.request({ path: '/session', decode: (payload) => payload });
+    expect(fetcher.mock.contexts[0]).toBe(globalThis);
+  });
+
   it('rejects paths that could escape the configured API base', async () => {
     const client = new AdminApiClient({ baseUrl: 'https://admin.example.invalid/api', fetcher: vi.fn<typeof fetch>() });
     await expect(client.request({ path: '//other.example.invalid', decode: (payload) => payload })).rejects.toThrow('within the configured API base');

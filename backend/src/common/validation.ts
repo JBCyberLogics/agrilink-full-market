@@ -5,8 +5,9 @@ import { HttpError } from './http.js';
 export function parseBody<T extends z.ZodType>(schema: T, value: unknown): z.output<T> {
   const parsed = schema.safeParse(value);
   if (!parsed.success) {
-    const first = parsed.error.issues[0];
-    throw new HttpError(422, first?.message ?? 'Check the submitted fields.', 'VALIDATION_FAILED', first?.path.join('.'));
+    const first: any = parsed.error.issues[0];
+    const field = first?.path?.join('.') || (first?.code === 'unrecognized_keys' && Array.isArray(first.keys) ? first.keys[0] : undefined);
+    throw new HttpError(422, first?.message ?? 'Check the submitted fields.', 'VALIDATION_FAILED', field);
   }
   return parsed.data;
 }

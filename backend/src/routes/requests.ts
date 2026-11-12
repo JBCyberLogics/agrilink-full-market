@@ -7,6 +7,7 @@ import { normalizeMatchingWeights } from '../common/algorithms.js';
 import { objectId, pagination, parseBody } from '../common/validation.js';
 import { Product, PurchaseRequest, Setting, User } from '../database/models.js';
 import { productIsAvailable, productToApi, stockOf } from '../services/marketplace.js';
+import { requirePlatformFeature } from '../services/platform-settings.js';
 
 async function requestToApi(row: any) {
   const request = typeof row?.toObject === 'function' ? row.toObject() : row;
@@ -102,6 +103,7 @@ purchaseRequestRouter.get('/matches', requireAuth, async (req, res) => {
   return sendList(res, matches.slice(skip, skip + limit), page, limit, matches.length);
 });
 purchaseRequestRouter.post('/', requireAuth, async (req, res) => {
+  await requirePlatformFeature('marketplaceEnabled');
   requireRole(req, ['buyer']);
   const listingSchema = z.object({
     listingId: z.string().min(1).max(80),

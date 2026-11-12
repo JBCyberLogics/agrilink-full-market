@@ -8,6 +8,7 @@ import { HttpError, sendData, sendList } from '../common/http.js';
 import { objectId, pagination, parseBody } from '../common/validation.js';
 import { Category, Favorite, Order, Product, Review, User } from '../database/models.js';
 import { cartRowToApi, categoryIdFrom, ownerIdOf, priceCentsOf, productIsAvailable, productToApi, requireOwnedProduct, stockOf } from '../services/marketplace.js';
+import { requirePlatformFeature } from '../services/platform-settings.js';
 
 export const productRouter = Router();
 export const categoryRouter = Router();
@@ -31,6 +32,7 @@ function productBaseFilter() {
 }
 
 productRouter.get('/', async (req, res) => {
+  await requirePlatformFeature('marketplaceEnabled');
   const { page, limit, skip } = pagination(req.query as Record<string, unknown>);
   const filter: Record<string, any> = productBaseFilter();
   const search = String(req.query.search ?? req.query.q ?? '').trim().slice(0, 80);
@@ -120,6 +122,7 @@ productRouter.get('/best-selling', async (req, res) => {
   return sendData(res, data.filter(Boolean));
 });
 productRouter.post(['/create-product', '/'], requireAuth, async (req, res) => {
+  await requirePlatformFeature('marketplaceEnabled');
   requireRole(req, ['farmer']);
   const body = parseBody(z.object({
     name: z.string().trim().min(2).max(120),
@@ -131,6 +134,8 @@ productRouter.post(['/create-product', '/'], requireAuth, async (req, res) => {
     measurementUnit: z.string().trim().min(1).max(30),
     unit: z.string().trim().min(1).max(30).optional(),
     description: z.string().max(3000).optional().default(''),
+    location: z.string().trim().max(120).optional(),
+    county: z.string().trim().max(80).optional(),
     images: z.array(z.string().url().max(2048)).max(8).optional().default([]),
   }), req.body);
   const categoryId = await categoryIdFrom(typeof body.category === 'string' ? body.category : body.category.id ?? body.category._id);
@@ -143,13 +148,15 @@ productRouter.post(['/create-product', '/'], requireAuth, async (req, res) => {
     quantityAvailable: stock, availableStock: stock, quantityReserved: 0,
     minimumOrderQuantity: 1, minOrderQuantity: 1,
     unit: body.unit ?? body.measurementUnit, measurementUnit: body.unit ?? body.measurementUnit,
-    county: req.user.county ?? '', status: 'active', isAvailable: true, isAvailableForSale: true,
+    ...(body.location ? { marketLocation: body.location } : {}),
+    county: body.county ?? req.user.county ?? '', status: 'active', isAvailable: true, isAvailableForSale: true,
     isDeleted: false, createdAt: new Date(), updatedAt: new Date(),
   });
   await writeAudit({ actor: req.user._id, action: 'product.created', resource: 'product', resourceId: String(product._id), metadata: { name: body.name } });
   return sendData(res, await productToApi(product), 201, 'Listing created.');
 });
 productRouter.get('/:id', async (req, res) => {
+  await requirePlatformFeature('marketplaceEnabled');
   const id = objectId(req.params.id);
   const product = await Product.findById(id);
   if (!product || product.isDeleted === true) throw new HttpError(404, 'Listing not found.', 'PRODUCT_NOT_FOUND');

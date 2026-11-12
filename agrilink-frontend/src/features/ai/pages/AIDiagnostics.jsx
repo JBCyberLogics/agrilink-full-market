@@ -1,13 +1,12 @@
 import { useMemo, useState } from 'react'
 import { Activity, AlertCircle, ArrowUpRight, CheckCircle2, CircleHelp, Clock3, KeyRound, Play, RotateCw, ShieldCheck, TerminalSquare, Wifi, WifiOff } from 'lucide-react'
-import { tokens } from '../../../services/api/client.js'
 import {
   agriculturalAssistant, cropAdvisor, harvestAdvisor, listingAssistant, marketAdvisor,
   matchingAssistant, netProfitAdvisor, priceAdvisor, produceFinder, purchaseAssistant,
   recommendationsCenter, supplierAdvisor,
 } from '../../../ai/services/index.js'
 import { AI_CONFIG, aiProxyIsConfigured } from '../../../ai/config.js'
-import { AI_DIAGNOSTIC_FEATURES, checkNvidiaConnection } from '../../../ai/diagnostics.js'
+import { AI_DIAGNOSTIC_FEATURES, checkProviderConnection } from '../../../ai/diagnostics.js'
 import { runAlgorithmSmokeTest } from '../../../ai/algorithmDiagnostics.js'
 import { validateAIRequest } from '../../../ai/schemas.js'
 
@@ -130,7 +129,7 @@ export default function AIDiagnostics() {
       setFeatureState((current) => ({ ...current, [capability]: {
         ...current[capability], live: 'PASS', endpoint, durationMs, result: response.data,
         error: '', modelId, provider,
-        providerVerification: provider?.toLowerCase() === 'nvidia' && modelId ? 'PASS' : 'BLOCKED',
+        providerVerification: provider && modelId ? 'PASS' : 'BLOCKED',
       } }))
       return
     }
@@ -145,7 +144,7 @@ export default function AIDiagnostics() {
   const runProviderCheck = async () => {
     setProviderBusy(true)
     setProviderState({ status: 'NOT TESTED', error: '', models: null, durationMs: null })
-    const response = await checkNvidiaConnection()
+    const response = await checkProviderConnection()
     setProviderState({ ...response, error: response.error || '' })
     setProviderBusy(false)
   }
@@ -172,7 +171,7 @@ export default function AIDiagnostics() {
   return (
     <div className="mx-auto max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
       <header className="flex flex-wrap items-end justify-between gap-4">
-        <div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-farmer-brand">Developer tools · DEV only</p><h1 className="mt-1 font-display text-2xl font-bold text-farmer-ink">AI integration diagnostics</h1><p className="mt-1 max-w-3xl text-sm leading-relaxed text-farmer-muted">Run local contract checks and explicitly initiated requests through AgriLink&apos;s authenticated proxy. The browser never receives NVIDIA credentials.</p></div>
+        <div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-farmer-brand">Developer tools · DEV only</p><h1 className="mt-1 font-display text-2xl font-bold text-farmer-ink">AI integration diagnostics</h1><p className="mt-1 max-w-3xl text-sm leading-relaxed text-farmer-muted">Run local contract checks and explicitly initiated requests through AgriLink&apos;s authenticated proxy. The browser never receives provider credentials.</p></div>
         <div className="flex flex-wrap gap-2"><button type="button" onClick={runAllAlgorithms} className="inline-flex h-10 items-center gap-2 rounded-xl border border-farmer-line bg-paper px-3.5 text-xs font-semibold text-farmer-ink hover:bg-farmer-page"><RotateCw size={14} aria-hidden="true" />Run all algorithm checks</button><button type="button" onClick={runSuite} disabled={runningAll} className="inline-flex h-10 items-center gap-2 rounded-xl bg-farmer-primary px-3.5 text-xs font-semibold text-white hover:bg-farmer-primary-hover disabled:opacity-50"><Play size={14} aria-hidden="true" />{runningAll ? 'Testing…' : 'Run complete AI suite'}</button></div>
       </header>
 
@@ -180,12 +179,12 @@ export default function AIDiagnostics() {
 
       <section className="grid gap-4 lg:grid-cols-[1.05fr_.95fr]" aria-label="Provider and dependency status">
         <article className="rounded-2xl border border-farmer-line bg-paper p-5 sm:p-6">
-          <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-wider text-farmer-muted">Provider connection</p><h2 className="mt-1 font-display text-lg font-bold text-farmer-ink">NVIDIA via AgriLink proxy</h2></div><Status value={providerState.status} /></div>
-          <p className="mt-2 text-xs leading-relaxed text-farmer-muted">The browser cannot call NVIDIA directly. A provider status result is shown only after the configured backend endpoint confirms connectivity and model access.</p>
-          <div className="mt-4 space-y-1"><ResultLine label="AI proxy" value={aiProxyIsConfigured() ? 'Configured' : 'Not configured'} status={aiProxyIsConfigured() ? 'NOT TESTED' : 'BLOCKED'} /><ResultLine label="Provider status endpoint" value={AI_CONFIG.statusEndpoint || 'Not configured'} status={providerConfigured ? 'NOT TESTED' : 'BLOCKED'} /><ResultLine label="Authenticated session" value={tokens.access ? 'Access token present (value hidden)' : 'No access token detected'} status={tokens.access ? 'NOT TESTED' : 'BLOCKED'} /><ResultLine label="Browser API key access" value="Never available by design" status="PASS" />{providerState.durationMs != null && <ResultLine label="Status request time" value={`${providerState.durationMs} ms`} />}{providerState.defaultModelId && <ResultLine label="Default model reported by backend" value={providerState.defaultModelId} />}</div>
+          <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-wider text-farmer-muted">Provider connection</p><h2 className="mt-1 font-display text-lg font-bold text-farmer-ink">Provider calls are managed by AgriLink Control</h2></div><Status value={providerState.status} /></div>
+          <p className="mt-2 text-xs leading-relaxed text-farmer-muted">Provider connectivity and inference diagnostics are restricted to AgriLink Control. This page can test capability requests only after explicit user input.</p>
+          <div className="mt-4 space-y-1"><ResultLine label="AI proxy" value={aiProxyIsConfigured() ? 'Configured' : 'Not configured'} status={aiProxyIsConfigured() ? 'NOT TESTED' : 'BLOCKED'} /><ResultLine label="Provider status endpoint" value={AI_CONFIG.statusEndpoint || 'Not configured'} status={providerConfigured ? 'NOT TESTED' : 'BLOCKED'} /><ResultLine label="Authenticated session" value="HttpOnly session cookie; verified by backend on request" status="NOT TESTED" /><ResultLine label="Browser API key access" value="Never available by design" status="PASS" />{providerState.durationMs != null && <ResultLine label="Status request time" value={`${providerState.durationMs} ms`} />}{providerState.defaultModelId && <ResultLine label="Default model reported by backend" value={providerState.defaultModelId} />}</div>
           {providerState.error && <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900" role="status">{providerState.error}</p>}
           <button type="button" onClick={runProviderCheck} disabled={!providerConfigured || providerBusy} className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg border border-farmer-line px-3 text-xs font-semibold text-farmer-ink hover:bg-farmer-page disabled:cursor-not-allowed disabled:opacity-50">{providerBusy ? <RotateCw size={14} className="animate-spin" aria-hidden="true" /> : <Wifi size={14} aria-hidden="true" />}Test provider and default model</button>
-          {!providerConfigured && <p className="mt-2 text-[11px] text-farmer-muted">No NVIDIA connection is claimed. Configure the backend proxy and proposed provider-status endpoint to enable this test.</p>}
+          {!providerConfigured && <p className="mt-2 text-[11px] text-farmer-muted">Provider diagnostics are available only to administrators in AgriLink Control.</p>}
         </article>
 
         <article className="rounded-2xl border border-farmer-line bg-paper p-5 sm:p-6"><div className="flex items-start gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-farmer-surface text-farmer-brand"><KeyRound size={16} aria-hidden="true" /></span><div><h2 className="font-display text-sm font-bold text-farmer-ink">Model inventory</h2><p className="mt-1 text-xs leading-relaxed text-farmer-muted">Model names and accessibility are read only from a backend status response. No model is assumed accessible from its configured name.</p></div></div>{providerState.models ? <div className="mt-4 max-h-52 space-y-1 overflow-auto">{AI_DIAGNOSTIC_FEATURES.map(({ id, name }) => { const model = providerState.models[id]; return <ResultLine key={id} label={name} value={model?.modelId || providerState.defaultModelId || 'Not reported'} status={model?.available === true ? 'PASS' : model?.available === false ? 'FAIL' : 'BLOCKED'} /> })}</div> : <div className="mt-4 rounded-xl border border-dashed border-farmer-line bg-farmer-page/50 px-4 py-5 text-center text-xs text-farmer-muted">No model inventory has been returned by a backend provider check.</div>}</article>
@@ -203,7 +202,7 @@ export default function AIDiagnostics() {
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-farmer-line px-4 py-4 sm:px-5"><div><p className="text-[10px] font-bold uppercase tracking-wider text-farmer-muted">{role} · {id}</p><h2 className="mt-1 font-display text-sm font-bold text-farmer-ink">{name}</h2></div><Status value={result.live} /></div>
             <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_minmax(260px,.72fr)]">
               <div><label htmlFor={`payload-${id}`} className="mb-1.5 block text-xs font-semibold text-farmer-ink">Request JSON</label><textarea id={`payload-${id}`} value={payloads[id]} onChange={(event) => setPayloads((current) => ({ ...current, [id]: event.target.value }))} rows={5} spellCheck="false" placeholder={`Enter a valid ${id} JSON request. No sample payload is prefilled.`} className="w-full rounded-xl border border-farmer-line bg-[#fbfcfa] p-3 font-mono text-[11px] leading-relaxed text-farmer-ink outline-none focus:border-farmer-brand focus:ring-2 focus:ring-farmer-brand/15" /><div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={() => validatePayload(id)} className="inline-flex h-9 items-center gap-2 rounded-lg border border-farmer-line px-3 text-xs font-semibold text-farmer-ink hover:bg-farmer-page"><CheckCircle2 size={14} aria-hidden="true" />Validate request</button><button type="button" onClick={() => { runAlgorithm(id) }} className="inline-flex h-9 items-center gap-2 rounded-lg border border-farmer-line px-3 text-xs font-semibold text-farmer-ink hover:bg-farmer-page"><Activity size={14} aria-hidden="true" />Run algorithm check</button><button type="button" disabled={runningAll} onClick={() => runFeature(id)} className="inline-flex h-9 items-center gap-2 rounded-lg bg-farmer-primary px-3 text-xs font-semibold text-white hover:bg-farmer-primary-hover disabled:opacity-50"><Play size={14} aria-hidden="true" />Run live request</button></div></div>
-              <div className="rounded-xl bg-farmer-page/60 p-3.5"><ResultLine label="Input schema" value={result.validation} status={result.validation} /><ResultLine label="AI request / response" value={result.durationMs != null ? `${result.durationMs} ms` : result.endpoint} status={result.live} /><ResultLine label="Local algorithm" value={result.algorithmMessage || result.algorithm} status={result.algorithm} />{result.providerVerification && <ResultLine label="NVIDIA/model attestation" value={result.provider ? `${result.provider}${result.modelId ? ` · ${result.modelId}` : ''}` : 'Provider/model not reported in response metadata'} status={result.providerVerification} />}
+              <div className="rounded-xl bg-farmer-page/60 p-3.5"><ResultLine label="Input schema" value={result.validation} status={result.validation} /><ResultLine label="AI request / response" value={result.durationMs != null ? `${result.durationMs} ms` : result.endpoint} status={result.live} /><ResultLine label="Local algorithm" value={result.algorithmMessage || result.algorithm} status={result.algorithm} />{result.providerVerification && <ResultLine label="Provider/model attestation" value={result.provider ? `${result.provider}${result.modelId ? ` · ${result.modelId}` : ''}` : 'Provider/model not reported in response metadata'} status={result.providerVerification} />}
                 {result.error && <p className="mt-3 break-words rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-950" role="alert"><AlertCircle size={13} className="mr-1 inline" aria-hidden="true" />{result.error}</p>}
                 {result.result && <details className="mt-3"><summary className="cursor-pointer text-xs font-semibold text-farmer-brand">View actual validated response</summary><pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-slate-950 p-3 text-[10px] leading-relaxed text-emerald-100">{JSON.stringify(result.result, null, 2)}</pre></details>}
                 {!result.endpoint?.includes('Not checked') && result.endpoint && <p className="mt-3 break-all text-[10px] text-farmer-muted">Endpoint: {result.endpoint}</p>}
@@ -213,7 +212,7 @@ export default function AIDiagnostics() {
         })}
       </section>
 
-      <footer className="rounded-xl border border-farmer-line bg-farmer-page/50 p-4 text-xs leading-relaxed text-farmer-muted"><div className="flex gap-2"><CircleHelp size={15} className="mt-0.5 shrink-0" aria-hidden="true" /><p><strong className="text-farmer-ink">PASS means</strong> a real proxied response was received and passed the feature response validator. Model verification requires the backend to report NVIDIA and the selected model ID. Algorithm smoke checks use synthetic diagnostic-only inputs and do not verify market truth or model output. <span className="inline-flex items-center gap-1"><WifiOff size={12} aria-hidden="true" />BLOCKED means a required endpoint, session, credential, or external service is unavailable.</span></p></div></footer>
+      <footer className="rounded-xl border border-farmer-line bg-farmer-page/50 p-4 text-xs leading-relaxed text-farmer-muted"><div className="flex gap-2"><CircleHelp size={15} className="mt-0.5 shrink-0" aria-hidden="true" /><p><strong className="text-farmer-ink">PASS means</strong> a real proxied response was received and passed the feature response validator. Provider verification requires the backend to report the provider and selected model ID. Algorithm smoke checks use synthetic diagnostic-only inputs and do not verify market truth or model output. <span className="inline-flex items-center gap-1"><WifiOff size={12} aria-hidden="true" />BLOCKED means a required endpoint, session, credential, or external service is unavailable.</span></p></div></footer>
     </div>
   )
 }

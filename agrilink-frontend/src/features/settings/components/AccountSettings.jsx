@@ -12,11 +12,12 @@ import {
 import {
   createExtendedProfile, deleteExtendedProfile, isAvatarStorageConfigured,
   isEmailChangeConfigured, isProfilePersistenceConfigured, readExtendedProfile,
-  removeProfilePicture, requestEmailChange, updateExtendedProfile,
+  removeProfilePicture, requestEmailChange, updateExtendedProfile, readPrivacyPreferences,
+  savePrivacyPreferences, readAccountPreferences, saveAccountPreferences,
   uploadProfilePicture, verifyEmailChange,
 } from '../services/profileSettingsService'
 import {
-  BUYER_PROFILE_FIELDS, FARMER_PROFILE_FIELDS, combineName,
+  BUYER_PROFILE_FIELDS, FARMER_PROFILE_FIELDS, buildProfilePatch, combineName,
   normalizeProfileFields, splitFullName, validateProfileDraft,
 } from '../profileSchema'
 import ProfilePictureField from './ProfilePictureField'
@@ -85,6 +86,18 @@ export default function AccountSettings({ role, onDeleted, onProfileUpdated }) {
   const [notificationSaving, setNotificationSaving] = useState(false)
   const [notificationError, setNotificationError] = useState('')
   const [notificationMessage, setNotificationMessage] = useState('')
+  const [privacyPreferences, setPrivacyPreferences] = useState({ showSellerName: true, showLocation: true, shareContactInformation: false })
+  const [privacySnapshot, setPrivacySnapshot] = useState({ showSellerName: true, showLocation: true, shareContactInformation: false })
+  const [privacyLoading, setPrivacyLoading] = useState(false)
+  const [privacySaving, setPrivacySaving] = useState(false)
+  const [privacyError, setPrivacyError] = useState('')
+  const [privacyMessage, setPrivacyMessage] = useState('')
+  const [accountPreferences, setAccountPreferences] = useState({ defaultListingUnit: null })
+  const [accountPreferencesSnapshot, setAccountPreferencesSnapshot] = useState({ defaultListingUnit: null })
+  const [accountPreferencesLoading, setAccountPreferencesLoading] = useState(false)
+  const [accountPreferencesSaving, setAccountPreferencesSaving] = useState(false)
+  const [accountPreferencesError, setAccountPreferencesError] = useState('')
+  const [accountPreferencesMessage, setAccountPreferencesMessage] = useState('')
 
   const [newEmail, setNewEmail] = useState('')
   const [emailCode, setEmailCode] = useState('')
@@ -97,6 +110,8 @@ export default function AccountSettings({ role, onDeleted, onProfileUpdated }) {
   const nameChanged = !!draft && !!snapshot && (draft.firstName !== snapshot.firstName || draft.lastName !== snapshot.lastName)
   const roleSections = sections(role)
   const notificationDirty = JSON.stringify(notificationPreferences) !== JSON.stringify(notificationSnapshot) || !notificationConfigured
+  const privacyDirty = JSON.stringify(privacyPreferences) !== JSON.stringify(privacySnapshot)
+  const accountPreferencesDirty = JSON.stringify(accountPreferences) !== JSON.stringify(accountPreferencesSnapshot)
   const supplementalChanged = useMemo(() => {
     if (!draft || !snapshot) return false
     return Object.keys(draft).some((key) => !['firstName', 'lastName'].includes(key) && JSON.stringify(draft[key]) !== JSON.stringify(snapshot[key]))
@@ -128,6 +143,28 @@ export default function AccountSettings({ role, onDeleted, onProfileUpdated }) {
     return () => { alive = false }
   }, [activeSection])
 
+  useEffect(() => {
+    if (activeSection !== 'privacy' || role !== 'Farmer') return undefined
+    let alive = true
+    setPrivacyLoading(true); setPrivacyError(''); setPrivacyMessage('')
+    readPrivacyPreferences().then(({ preferences }) => {
+      if (alive) { setPrivacyPreferences(preferences); setPrivacySnapshot(preferences) }
+    }).catch((error) => { if (alive) setPrivacyError(error?.error || 'Privacy settings could not be loaded.') })
+      .finally(() => { if (alive) setPrivacyLoading(false) })
+    return () => { alive = false }
+  }, [activeSection, role])
+
+  useEffect(() => {
+    if (activeSection !== 'preferences') return undefined
+    let alive = true
+    setAccountPreferencesLoading(true); setAccountPreferencesError(''); setAccountPreferencesMessage('')
+    readAccountPreferences().then(({ preferences }) => {
+      if (alive) { const next = { defaultListingUnit: preferences?.defaultListingUnit ?? null }; setAccountPreferences(next); setAccountPreferencesSnapshot(next) }
+    }).catch((error) => { if (alive) setAccountPreferencesError(error?.error || 'Account preferences could not be loaded.') })
+      .finally(() => { if (alive) setAccountPreferencesLoading(false) })
+    return () => { alive = false }
+  }, [activeSection])
+
   async function saveNotificationPreferences(event) {
     event.preventDefault()
     setNotificationSaving(true); setNotificationError(''); setNotificationMessage('')
@@ -139,6 +176,23 @@ export default function AccountSettings({ role, onDeleted, onProfileUpdated }) {
       setNotificationMessage('In-app notification preferences were saved to your account.')
     } catch (error) { setNotificationError(error?.error || error?.message || 'Notification preferences could not be saved.') }
     finally { setNotificationSaving(false) }
+  }
+
+  async function savePrivacy(event) {
+    event.preventDefault(); setPrivacySaving(true); setPrivacyError(''); setPrivacyMessage('')
+    try { const saved = await savePrivacyPreferences(privacyPreferences); setPrivacyPreferences(saved); setPrivacySnapshot(saved); setPrivacyMessage('Privacy settings were saved and are enforced on public listing responses.') }
+    catch (error) { setPrivacyError(error?.error || 'Privacy settings could not be saved.') }
+    finally { setPrivacySaving(false) }
+  }
+
+  async function saveAccountPreference(event) {
+    event.preventDefault(); setAccountPreferencesSaving(true); setAccountPreferencesError(''); setAccountPreferencesMessage('')
+    try {
+      const result = await saveAccountPreferences(accountPreferences)
+      const saved = { defaultListingUnit: result?.preferences?.defaultListingUnit ?? null }
+      setAccountPreferences(saved); setAccountPreferencesSnapshot(saved); setAccountPreferencesMessage('Your default listing unit was saved. New produce forms will use it.')
+    } catch (error) { setAccountPreferencesError(error?.error || 'Account preferences could not be saved.') }
+    finally { setAccountPreferencesSaving(false) }
   }
 
   const loadProfile = async () => {
@@ -211,6 +265,11 @@ export default function AccountSettings({ role, onDeleted, onProfileUpdated }) {
     event?.preventDefault?.()
     if (!draft || !dirty) return
     const validation = validateProfileDraft(role, draft)
+    if (role === 'Farmer' && supplementalChanged && !profileExists) {
+      if (!String(draft.farmName ?? '').trim()) validation.farmName = 'Enter your farm name.'
+      if (!String(draft.county ?? '').trim()) validation.county = 'Enter your county.'
+      if (!Array.isArray(draft.mainCrops) || draft.mainCrops.every((crop) => !String(crop).trim())) validation.mainCrops = 'Add at least one main crop.'
+    }
     setFieldErrors(validation)
     if (Object.keys(validation).length) {
       setSaveError('Review the highlighted profile fields.')
@@ -235,10 +294,9 @@ export default function AccountSettings({ role, onDeleted, onProfileUpdated }) {
         throw { code: 'PROFILE_READ_FAILED', error: 'The existing profile could not be read, so no create or update request was sent.' }
       }
       if (supplementalChanged && profileConfigured) {
-        const { firstName, lastName, profilePicture, ...roleProfile } = draft
-        const payload = { ...roleProfile, farmSize: draft.farmSize === '' ? null : Number(draft.farmSize), farmingExperienceYears: draft.farmingExperienceYears === '' ? null : Number(draft.farmingExperienceYears) }
-        if (profileExists) await updateExtendedProfile(role.toLowerCase(), payload)
-        else await createExtendedProfile(role.toLowerCase(), payload)
+        const payload = buildProfilePatch(role, draft, snapshot)
+        if (profileExists) await updateExtendedProfile(payload)
+        else await createExtendedProfile(payload)
         setProfileExists(true)
       }
       if (nameChanged) {
@@ -259,6 +317,10 @@ export default function AccountSettings({ role, onDeleted, onProfileUpdated }) {
       commitSnapshot(nextDraft)
       setSaveMessage('The server accepted your profile update and the account has been refreshed.')
     } catch (error) {
+      const field = String(error?.field ?? '').replace(/^profile\./, '')
+      if (field && Object.prototype.hasOwnProperty.call(draft, field)) {
+        setFieldErrors((current) => ({ ...current, [field]: error?.error || 'Check this field.' }))
+      }
       setSaveError(error?.error || error?.message || 'Your profile could not be saved. No success was reported.')
     } finally {
       setSaving(false)
@@ -431,7 +493,7 @@ export default function AccountSettings({ role, onDeleted, onProfileUpdated }) {
                 <Field label="First name" name="firstName" value={draft.firstName} onChange={setField('firstName')} error={fieldErrors.firstName} autoComplete="given-name" />
                 <Field label="Last name" name="lastName" value={draft.lastName} onChange={setField('lastName')} error={fieldErrors.lastName} autoComplete="family-name" />
                 <Field label="Phone number" name="phoneNumber" value={draft.phoneNumber} onChange={setField('phoneNumber')} error={fieldErrors.phoneNumber} type="tel" autoComplete="tel" placeholder="+254…" />
-                <Field label="County" name="county" value={draft.county} onChange={setField('county')} autoComplete="address-level1" />
+                <Field label="County" name="county" value={draft.county} onChange={setField('county')} error={fieldErrors.county} autoComplete="address-level1" />
                 <Field label="Sub-county" name="subCounty" value={draft.subCounty} onChange={setField('subCounty')} />
                 <Field label="Town or location" name="town" value={draft.town} onChange={setField('town')} autoComplete="address-level2" />
               </div>
@@ -444,10 +506,10 @@ export default function AccountSettings({ role, onDeleted, onProfileUpdated }) {
             {activeSection === 'role' && <form onSubmit={saveProfile} className="space-y-5">
               <div><h3 className="font-display text-lg font-bold text-farmer-ink">{role === 'Farmer' ? 'Farm profile' : 'Buyer profile'}</h3><p className="mt-1 text-sm text-farmer-muted">These details describe your {role.toLowerCase()} account. Changes remain drafts until an account-scoped profile endpoint accepts them.</p></div>
               {role === 'Farmer' ? <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Farm name" name="farmName" value={draft.farmName} onChange={setField('farmName')} />
+                <Field label="Farm name" name="farmName" value={draft.farmName} onChange={setField('farmName')} error={fieldErrors.farmName} />
                 <div className="grid grid-cols-[1fr_130px] gap-2"><Field label="Farm size" name="farmSize" value={draft.farmSize} onChange={setField('farmSize')} error={fieldErrors.farmSize} type="number" min="0" step="any" /><label className="block"><span className="mb-1.5 block text-xs font-semibold text-farmer-ink">Unit</span><select value={draft.farmSizeUnit} onChange={setField('farmSizeUnit')} className={inputClass}><option value="acres">Acres</option><option value="hectares">Hectares</option></select></label></div>
                 <Field label="Farming experience (years)" name="farmingExperienceYears" value={draft.farmingExperienceYears} onChange={setField('farmingExperienceYears')} error={fieldErrors.farmingExperienceYears} type="number" min="0" step="1" />
-                <Field label="Main crops or produce" name="mainCrops" value={(draft.mainCrops ?? []).join(', ')} onChange={(event) => setDraft((current) => ({ ...current, mainCrops: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) }))} placeholder="Separate crops with commas" />
+                <Field label="Main crops or produce" name="mainCrops" value={(draft.mainCrops ?? []).join(', ')} onChange={(event) => { setDraft((current) => ({ ...current, mainCrops: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })); setFieldErrors((current) => ({ ...current, mainCrops: undefined })) }} error={fieldErrors.mainCrops} placeholder="Separate crops with commas" />
                 <div className="sm:col-span-2"><TextAreaField label="About your farm and farming practices" name="about" value={draft.about} onChange={setField('about')} rows={5} placeholder="Share details you want buyers to know." /></div>
               </div> : <div className="grid gap-4 sm:grid-cols-2">
                 <label className="block"><span className="mb-1.5 block text-xs font-semibold text-farmer-ink">Buyer type</span><select value={draft.buyerType} onChange={(event) => { setDraft((current) => ({ ...current, buyerType: event.target.value, ...(event.target.value === 'individual' ? { organizationName: '', businessDescription: '' } : {}) })); setFieldErrors((current) => ({ ...current, organizationName: undefined })) }} className={inputClass}><option value="individual">Individual</option><option value="business">Business or organization</option></select></label>
@@ -472,8 +534,8 @@ export default function AccountSettings({ role, onDeleted, onProfileUpdated }) {
             </div>}
 
             {activeSection === 'notifications' && <div className="space-y-4"><div><h3 className="font-display text-lg font-bold text-farmer-ink">Notifications</h3><p className="mt-1 text-sm text-farmer-muted">Choose which in-app alerts AgriLink stores for this account.</p></div>{notificationLoading ? <p role="status" className="rounded-xl border border-farmer-line bg-paper p-4 text-sm text-farmer-muted">Loading saved notification preferences…</p> : <form onSubmit={saveNotificationPreferences} className="space-y-4 rounded-2xl border border-farmer-line bg-paper p-4 sm:p-5"><div className="space-y-3">{[['messages', 'New messages', 'Show in-app alerts when another account messages you.'], ['orders', 'Order updates', 'Show in-app alerts when an order is placed or its delivery status changes.']].map(([key, title, description]) => <label key={key} className="flex cursor-pointer items-start gap-3 rounded-xl border border-farmer-line p-3"><input type="checkbox" checked={notificationPreferences[key]} onChange={(event) => setNotificationPreferences((current) => ({ ...current, [key]: event.target.checked }))} className="mt-0.5 h-4 w-4 accent-farmer-brand" /><span><span className="block text-sm font-semibold text-farmer-ink">{title}</span><span className="mt-0.5 block text-xs leading-relaxed text-farmer-muted">{description}</span></span></label>)}</div>{!notificationConfigured && <p className="text-xs text-farmer-muted">No preference has been saved yet. The current in-app defaults are on; saving will store the choices above.</p>}<p className="text-xs text-farmer-muted">In-app alerts: available · Email: {notificationDelivery.email} · Mobile push: {notificationDelivery.push}</p><div className="flex justify-end"><button type="submit" disabled={notificationSaving || !notificationDirty} className="inline-flex h-9 items-center gap-2 rounded-lg bg-farmer-primary px-4 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{notificationSaving ? <LoaderCircle size={14} className="animate-spin" aria-hidden="true" /> : <Save size={14} aria-hidden="true" />}{notificationSaving ? 'Saving…' : 'Save preferences'}</button></div><Message error>{notificationError}</Message><Message status>{notificationMessage}</Message></form>}</div>}
-            {activeSection === 'privacy' && <><div><h3 className="font-display text-lg font-bold text-farmer-ink">Privacy</h3><p className="mt-1 text-sm text-farmer-muted">Profile visibility and contact sharing should reflect controls enforced by the backend.</p></div><IntegrationPanel title="Privacy controls require backend rules" description="No account privacy fields or read/update operations are documented in the frontend API client. No local-only privacy switch is presented as an effective setting." /></>}
-            {activeSection === 'preferences' && <><div><h3 className="font-display text-lg font-bold text-farmer-ink">Account preferences</h3><p className="mt-1 text-sm text-farmer-muted">Language, units, and marketplace defaults should persist with your account.</p></div><IntegrationPanel title="Account preferences are not connected" description="The catalog does not expose account-scoped preference fields. Unit, language, or search preferences cannot be saved to the account yet." /></>}
+            {activeSection === 'privacy' && <div className="space-y-4"><div><h3 className="font-display text-lg font-bold text-farmer-ink">Privacy</h3><p className="mt-1 text-sm text-farmer-muted">These choices are stored with your farmer profile and applied when the marketplace returns seller information.</p></div>{role !== 'Farmer' ? <IntegrationPanel title="Farmer privacy settings" description="These visibility controls apply to farmer listing profiles. Your buyer account does not have a farm profile." /> : privacyLoading ? <p role="status" className="rounded-xl border border-farmer-line bg-paper p-4 text-sm text-farmer-muted">Loading saved privacy settings…</p> : <form onSubmit={savePrivacy} className="space-y-4 rounded-2xl border border-farmer-line bg-paper p-4 sm:p-5"><div className="space-y-3">{[['showSellerName','Show my name on public listings','When off, public marketplace responses omit your name.'],['showLocation','Show my location on public listings','When off, public marketplace responses omit your town and county.'],['shareContactInformation','Share my contact details with marketplace visitors','When on, public listing responses include your account email and phone if set.']].map(([key,title,description])=><label key={key} className="flex cursor-pointer items-start gap-3 rounded-xl border border-farmer-line p-3"><input type="checkbox" checked={privacyPreferences[key]} onChange={(event)=>setPrivacyPreferences((current)=>({...current,[key]:event.target.checked}))} className="mt-0.5 h-4 w-4 accent-farmer-brand"/><span><span className="block text-sm font-semibold text-farmer-ink">{title}</span><span className="mt-0.5 block text-xs leading-relaxed text-farmer-muted">{description}</span></span></label>)}</div><p className="text-xs text-farmer-muted">Contact details are hidden unless you explicitly enable sharing. Order fulfillment details remain available to the buyer and farmer on that order.</p><div className="flex justify-end"><button type="submit" disabled={privacySaving||!privacyDirty} className="inline-flex h-9 items-center gap-2 rounded-lg bg-farmer-primary px-4 text-xs font-semibold text-white disabled:opacity-50">{privacySaving?<LoaderCircle size={14} className="animate-spin" aria-hidden="true"/>:<Save size={14} aria-hidden="true"/>}{privacySaving?'Saving…':'Save privacy settings'}</button></div><Message error>{privacyError}</Message><Message status>{privacyMessage}</Message></form>}</div>}
+            {activeSection === 'preferences' && <div className="space-y-4"><div><h3 className="font-display text-lg font-bold text-farmer-ink">Account preferences</h3><p className="mt-1 text-sm text-farmer-muted">Choose the initial measurement unit used by new produce listings. Your theme preference remains available from the app theme control.</p></div>{accountPreferencesLoading ? <p role="status" className="rounded-xl border border-farmer-line bg-paper p-4 text-sm text-farmer-muted">Loading saved account preferences…</p> : role !== 'Farmer' ? <IntegrationPanel title="No buyer-specific account preference is configured" description="The buyer workflow does not currently expose a saved marketplace default. Notification preferences and theme controls are available in their own sections." /> : <form onSubmit={saveAccountPreference} className="space-y-4 rounded-2xl border border-farmer-line bg-paper p-4 sm:p-5"><label className="block max-w-sm"><span className="mb-1.5 block text-xs font-semibold text-farmer-ink">Default unit for new produce listings</span><select className={inputClass} value={accountPreferences.defaultListingUnit ?? ''} onChange={(event)=>setAccountPreferences({defaultListingUnit:event.target.value||null})}><option value="">Use the form default</option>{['kg','litre','bunch','tray','crate','bird','head','cob','jar'].map((unit)=><option key={unit} value={unit}>{unit}</option>)}</select></label><p className="text-xs text-farmer-muted">This affects the unit preselected on My Produce. Existing listings are not changed.</p><div className="flex justify-end"><button type="submit" disabled={accountPreferencesSaving||!accountPreferencesDirty} className="inline-flex h-9 items-center gap-2 rounded-lg bg-farmer-primary px-4 text-xs font-semibold text-white disabled:opacity-50">{accountPreferencesSaving?<LoaderCircle size={14} className="animate-spin" aria-hidden="true"/>:<Save size={14} aria-hidden="true"/>}{accountPreferencesSaving?'Saving…':'Save preferences'}</button></div><Message error>{accountPreferencesError}</Message><Message status>{accountPreferencesMessage}</Message></form>}</div>}
           </div>
         </div>
       </section>

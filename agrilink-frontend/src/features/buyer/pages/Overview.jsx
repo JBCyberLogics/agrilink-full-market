@@ -14,8 +14,7 @@ import { ArrowRight, Search, Package, CheckCircle2, Clock3, AlertCircle, Calenda
 import StatCard from '../../../components/feedback/StatCard'
 import EmptyState from '../../../components/feedback/EmptyState'
 import StatusChip from '../../../components/feedback/StatusChip'
-import { useBuyerData } from '../hooks/useBuyerData'
-import { CATEGORIES, CATEGORY_FILTERS } from '../../../constants/index.js'
+import { useBuyerData, useBuyerOrders, useMarketCategories } from '../hooks/useBuyerData'
 import { kes, fmtDate } from '../../../utils/format'
 
 function Card({ title, children, action }) {
@@ -32,6 +31,8 @@ function Card({ title, children, action }) {
 
 export default function Overview({ onJumpToBrowse }) {
   const { status, listings, saved, requests, error, refresh } = useBuyerData()
+  const orderData = useBuyerOrders()
+  const categoryData = useMarketCategories()
 
   if (status === 'loading')
     return (
@@ -64,7 +65,7 @@ export default function Overview({ onJumpToBrowse }) {
   const myRows = [
     ...saved.saved.map((s) => s.category),
     ...(requests.status === 'ok' ? requests.requests.filter((r) => r.listing).map((r) => r.listing.category) : []),
-  ]
+  ].filter(Boolean)
   const topCategory = myRows
     .map((c) => [c, myRows.filter((x) => x === c).length])
     .sort((a, b) => b[1] - a[1])[0]?.[0]
@@ -82,7 +83,7 @@ export default function Overview({ onJumpToBrowse }) {
           icon={Package}
           label="Available Produce"
           value={listings.length}
-          hint={`${CATEGORIES.filter((c) => listings.some((l) => l.category === c)).length} active categories right now`}
+          hint={`${new Set(listings.map((listing) => listing.category).filter(Boolean)).size} active categories with available listings`}
         />
         <StatCard
           icon={Clock3}
@@ -107,13 +108,13 @@ export default function Overview({ onJumpToBrowse }) {
         <StatCard
           icon={CalendarPlus}
           label="Active Orders"
-          value="N/A"
-          hint="Orders are not available yet, check back after checkout ships."
+          value={orderData.status === 'ok' ? orderData.orders.filter((order) => ['Pending', 'Confirmed', 'Packed', 'In transit', 'Out for delivery', 'Ready for pickup'].includes(order.status)).length : '—'}
+          hint={orderData.status === 'error' ? orderData.error : orderData.status === 'loading' ? 'Loading your order records…' : 'Orders not yet delivered or cancelled.'}
         />
       </div>
 
       {/* --------------------------- find produce --------------------------- */}
-      <FindProduceForm onJumpToBrowse={onJumpToBrowse} listings={listings} />
+      <FindProduceForm onJumpToBrowse={onJumpToBrowse} listings={listings} categories={categoryData.categories} categoriesStatus={categoryData.status} />
 
       <div className="grid gap-6 xl:grid-cols-2">
         {/* -------------------- produce you may need -------------------- */}
@@ -153,7 +154,7 @@ export default function Overview({ onJumpToBrowse }) {
             </>
           ) : (
             <EmptyState icon={Package} title="No recommendations yet">
-              Save produce and current listings in its category appear here. Purchase-request history is currently unavailable from the backend.
+              Save produce or send a purchase request. This panel then uses those actual categories to find available listings.
             </EmptyState>
           )}
         </Card>
@@ -226,7 +227,7 @@ export default function Overview({ onJumpToBrowse }) {
 /* status text — the backend's documented values, never color-only */
 
 /* ------------------------- Find Produce (→ Browse) ------------------------- */
-function FindProduceForm({ onJumpToBrowse, listings }) {
+function FindProduceForm({ onJumpToBrowse, listings, categories, categoriesStatus }) {
   const [f, setF] = useState({ q: '', category: 'All', location: '', min: '', max: '', minQty: '' })
   const [err, setErr] = useState('')
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }))
@@ -257,10 +258,11 @@ function FindProduceForm({ onJumpToBrowse, listings }) {
         <label className="block">
           <span className="mb-1.5 block text-xs font-medium text-farmer-ink">Category</span>
           <select value={f.category} onChange={set('category')} aria-label="Category" className={inputCls}>
-            {CATEGORY_FILTERS.map((c) => (
+            {['All', ...categories.map((category) => category.name)].map((c) => (
               <option key={c} value={c}>{c === 'All' ? 'All categories' : c}</option>
             ))}
           </select>
+          {categoriesStatus === 'error' && <span role="status" className="mt-1 block text-xs text-farmer-muted">Active categories could not be loaded.</span>}
         </label>
         <label className="block">
           <span className="mb-1.5 block text-xs font-medium text-farmer-ink">County</span>

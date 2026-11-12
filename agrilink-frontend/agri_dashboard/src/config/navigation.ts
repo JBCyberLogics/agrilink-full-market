@@ -15,6 +15,7 @@ import {
   FileText,
   Handshake,
   HeartPulse,
+  HelpCircle,
   LayoutDashboard,
   Leaf,
   ListChecks,
@@ -41,7 +42,7 @@ export type PageId =
   | 'listings' | 'categories' | 'markets' | 'transactions' | 'disputes'
   | 'ai-control' | 'nvidia' | 'models' | 'agent-studio' | 'capabilities' | 'algorithms'
   | 'market-intelligence' | 'data-sources' | 'ai-diagnostics' | 'ai-usage'
-  | 'support' | 'announcements' | 'reports' | 'audit-logs' | 'system-health'
+  | 'support' | 'announcements' | 'faqs' | 'reports' | 'audit-logs' | 'system-health'
   | 'general-settings' | 'security-settings' | 'marketplace-settings' | 'notification-settings';
 
 export type PageDefinition = {
@@ -75,9 +76,9 @@ const pages: PageDefinition[] = [
   { id: 'transactions', path: '/marketplace/transactions', title: 'Orders & transactions', description: 'Traceable marketplace orders and financial records.', icon: WalletCards, group: 'Marketplace', kind: 'resource' },
   { id: 'disputes', path: '/marketplace/disputes', title: 'Reports & disputes', description: 'Reported content, buyer–seller disputes, and resolution history.', icon: Handshake, group: 'Marketplace', kind: 'resource' },
   { id: 'ai-control', path: '/ai/control-centre', title: 'AI control centre', description: 'One operational view of AgriLink intelligence services.', icon: BrainCircuit, group: 'AI & intelligence', kind: 'ai' },
-  { id: 'nvidia', path: '/ai/nvidia', title: 'NVIDIA configuration', description: 'Backend-managed provider settings and genuine connection diagnostics.', icon: Cpu, group: 'AI & intelligence', kind: 'provider' },
-  { id: 'models', path: '/ai/models', title: 'Model registry', description: 'Provider-reported models, capabilities, and assignment state.', icon: Boxes, group: 'AI & intelligence', kind: 'resource' },
-  { id: 'agent-studio', path: '/ai/agent-studio', title: 'AI agent studio', description: 'The central agent, its routes, tools, permissions, and version history.', icon: Bot, group: 'AI & intelligence', kind: 'ai' },
+  { id: 'nvidia', path: '/ai/nvidia', title: 'AI providers', description: 'Manage NVIDIA, OpenAI, and DeepSeek credentials, capability routes, and diagnostics.', icon: Cpu, group: 'AI & intelligence', kind: 'provider' },
+  { id: 'models', path: '/ai/models', title: 'Model configuration', description: 'Default and capability-specific model assignments saved on the backend.', icon: Boxes, group: 'AI & intelligence', kind: 'resource' },
+  { id: 'agent-studio', path: '/ai/agent-studio', title: 'AI agent runtime', description: 'Live provider and capability model routing; no separate tool or version editor exists.', icon: Bot, group: 'AI & intelligence', kind: 'ai' },
   { id: 'capabilities', path: '/ai/capabilities', title: 'AI capabilities', description: 'The twelve requested AgriLink AI capabilities and their verification state.', icon: ListChecks, group: 'AI & intelligence', kind: 'capabilities' },
   { id: 'algorithms', path: '/ai/algorithms', title: 'Smart algorithm studio', description: 'Deterministic, explainable scoring and calculation tools.', icon: SlidersHorizontal, group: 'AI & intelligence', kind: 'algorithm' },
   { id: 'market-intelligence', path: '/market-intelligence', title: 'Market intelligence', description: 'Verified agricultural observations, freshness, and data quality.', icon: BarChart3, group: 'AI & intelligence', kind: 'resource' },
@@ -86,6 +87,7 @@ const pages: PageDefinition[] = [
   { id: 'ai-usage', path: '/ai/usage', title: 'AI usage & monitoring', description: 'Usage and performance from genuine backend telemetry.', icon: FileBarChart, group: 'AI & intelligence', kind: 'analytics' },
   { id: 'support', path: '/support', title: 'Support & messages', description: 'Support requests, assignment, and response history.', icon: MessageSquareText, group: 'Operations', kind: 'resource' },
   { id: 'announcements', path: '/announcements', title: 'Announcements', description: 'Role-targeted platform communications and publishing state.', icon: Megaphone, group: 'Operations', kind: 'resource' },
+  { id: 'faqs', path: '/faqs', title: 'FAQ content', description: 'Persistent public help answers shown to Farmer and Buyer accounts.', icon: HelpCircle, group: 'Operations', kind: 'resource' },
   { id: 'reports', path: '/reports', title: 'Reports & exports', description: 'Authorized reports generated from genuine records.', icon: FileText, group: 'Operations', kind: 'resource' },
   { id: 'audit-logs', path: '/audit-logs', title: 'Audit logs', description: 'Append-only administrative activity from the shared backend.', icon: ScrollText, group: 'Operations', kind: 'resource' },
   { id: 'system-health', path: '/system-health', title: 'System health', description: 'Health information reported by platform services.', icon: HeartPulse, group: 'Operations', kind: 'health' },

@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import logoUrl from '../../../../images/logo.png';
 import maizeUrl from '../../../../images/maize.jpeg';
 
-export function LoginBrandPanel({ onDevelopmentPreview }: { onDevelopmentPreview?: () => void }) {
+export function LoginBrandPanel() {
   const [imageAvailable, setImageAvailable] = useState(true);
 
   return (
@@ -36,13 +36,6 @@ export function LoginBrandPanel({ onDevelopmentPreview }: { onDevelopmentPreview
           <p>One clear view across the systems that connect farms, markets, and people.</p>
         </div>
       </div>
-      {onDevelopmentPreview && (
-        <div className="login-brand__footer">
-          <button className="auth-preview-link" type="button" onClick={onDevelopmentPreview}>
-            Open development preview <span>↗</span>
-          </button>
-        </div>
-      )}
     </motion.aside>
   );
 }

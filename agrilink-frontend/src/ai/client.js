@@ -6,7 +6,7 @@ import { validateAIRequest, validateAIResponse } from './schemas.js'
 const capabilitySet = new Set(AI_CAPABILITY_LIST)
 
 /**
- * Call AgriLink's future AI proxy. NVIDIA credentials are never read by this
+ * Call AgriLink's AI gateway. Provider credentials are never read by this
  * module and must only be configured in the proxy's server environment.
  */
 export async function requestAI(capability, request, { signal } = {}) {
@@ -48,7 +48,7 @@ export async function requestAI(capability, request, { signal } = {}) {
         throw new AIIntegrationError('The AI proxy returned a response for a different capability.', { code: 'AI_RESPONSE_MISMATCH' })
       }
       const data = validateAIResponse(capability, result?.data ?? result)
-      return { ok: true, data, meta: result?.meta ?? null }
+      return { ok: true, data, meta: result?.meta ?? null, conversationId: result?.conversationId ?? null }
     } finally {
       clearTimeout(timeout)
       signal?.removeEventListener('abort', relayAbort)

@@ -5,7 +5,10 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { createOrder } from '../features/orders/services/orderService'
 import Checkout from '../features/cart/pages/Checkout'
+
+vi.mock('../features/orders/services/orderService', () => ({ createOrder: vi.fn() }))
 
 const user = { name: 'Wanjiku Kamau', email: 'wanjiku@example.com', role: 'Buyer' }
 
@@ -21,7 +24,10 @@ const cart = [
   },
 ]
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.mocked(createOrder).mockReset()
+})
 
 describe('Checkout — anonymous user', () => {
   it('shows a sign-in prompt instead of the basket', () => {
@@ -71,6 +77,18 @@ describe('Checkout — signed-in user', () => {
     expect(btn.disabled).toBe(false)
     /* cart prop unchanged (Checkout does not mutate it) */
     expect(cart).toHaveLength(1)
+  })
+
+  it('synchronously suppresses duplicate submits while checkout is in flight', () => {
+    vi.mocked(createOrder).mockReturnValue(new Promise(() => {}))
+    const address = { phone: '0712345678', line1: '12 River Road', line2: '', city: 'Nairobi', county: 'Nairobi', postal: '00100' }
+    render(<Checkout cart={cart} user={user} address={address} onQty={vi.fn()} onRemove={vi.fn()} />)
+    const form = screen.getByRole('button', { name: /continue to payment/i }).closest('form')
+
+    fireEvent.submit(form)
+    fireEvent.submit(form)
+
+    expect(createOrder).toHaveBeenCalledTimes(1)
   })
 
   it('returns to the marketplace with Add More Items', () => {

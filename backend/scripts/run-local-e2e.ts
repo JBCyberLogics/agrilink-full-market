@@ -1,12 +1,16 @@
 import 'dotenv/config';
-import { randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { unlink } from 'node:fs/promises';
+import path from 'node:path';
 import mongoose from 'mongoose';
 import request from 'supertest';
 import { createApp } from '../src/main.js';
 import { connectDatabase, disconnectDatabase } from '../src/database/connection.js';
 import { initializeDatabase } from '../src/database/initialize.js';
-import { Category, CartItem, IdempotencyKey, MarketDataSource, MarketPrice, Order, Payment, Product, ProviderSync, RefreshToken, User, AuditLog, AiConversation, AiMessage, AiUsage, Setting, PurchaseRequest, ContactMessage, Report, Withdraw, Conversation, Message, Notification, NotificationLog, Review } from '../src/database/models.js';
+import { Announcement, Category, CartItem, FarmerProfile, IdempotencyKey, MarketDataSource, MarketPrice, Order, Otp, Payment, Product, ProviderSync, RefreshToken, User, AuditLog, AiConversation, AiMessage, AiUsage, Setting, PurchaseRequest, ContactMessage, Report, Withdraw, Conversation, Message, Notification, NotificationLog, Review, AdminRole, FAQ } from '../src/database/models.js';
 import { hashPassword } from '../src/services/password.js';
+import { invalidatePlatformSettingsCache } from '../src/services/platform-settings.js';
+import { getConfig } from '../src/config/env.js';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -21,6 +25,9 @@ if (parsedUri.protocol !== 'mongodb:' || !['127.0.0.1', 'localhost'].includes(pa
 }
 
 process.env.NODE_ENV = 'test';
+// The isolated app returns absolute upload URLs so the ownership-aware delete
+// route can validate the same origin used when the file was created.
+process.env.PUBLIC_API_URL = `http://localhost:${process.env.PORT || '4300'}`;
 // End-to-end fixtures must never send email to external addresses.
 process.env.SMTP_HOST = '';
 process.env.SMTP_FROM = '';
@@ -30,8 +37,15 @@ const password = 'AgriLink isolated test password 7!';
 let farmerId: mongoose.Types.ObjectId | undefined;
 let buyerId: mongoose.Types.ObjectId | undefined;
 let adminId: mongoose.Types.ObjectId | undefined;
+let roleTargetId: mongoose.Types.ObjectId | undefined;
+let targetAdminId: mongoose.Types.ObjectId | undefined;
 let categoryId: mongoose.Types.ObjectId | undefined;
+let adminCreatedCategoryId: mongoose.Types.ObjectId | undefined;
+let announcementId: mongoose.Types.ObjectId | undefined;
+let faqId: mongoose.Types.ObjectId | undefined;
 let productId: mongoose.Types.ObjectId | undefined;
+let testUploadFilename: string | undefined;
+let testPaymentId: mongoose.Types.ObjectId | undefined;
 let reviewId: mongoose.Types.ObjectId | undefined;
 let conversationId: mongoose.Types.ObjectId | undefined;
 let contactMessageId: mongoose.Types.ObjectId | undefined;
@@ -43,17 +57,48 @@ let previousAiProviderSetting: any;
 let testAiProviderSettingId: mongoose.Types.ObjectId | undefined;
 let previousMatchingSetting: any;
 let testMatchingSettingId: mongoose.Types.ObjectId | undefined;
+let previousPlatformSettings: any[] | undefined;
+let testPlatformSettings: any[] = [];
+let platformSettingsTestStartedAt: Date | undefined;
+const otpFixtureIds: mongoose.Types.ObjectId[] = [];
+let otpCreatedUserId: mongoose.Types.ObjectId | undefined;
 
-async function csrf(agent: ReturnType<typeof request.agent>) {
-  const response = await agent.get('/api/v1/auth/csrf');
+const otpChallengeHash = (value: string) => createHmac('sha256', getConfig().sessionSecret).update(value).digest('hex');
+const otpCodeHash = (challengeId: string, code: string) => createHmac('sha256', getConfig().sessionSecret).update(`${challengeId}:${code}`).digest('hex');
+
+async function createOtpFixture(input: { email: string; challengeId: string; code: string; passwordHash: string; user?: mongoose.Types.ObjectId; expiresAt?: Date }) {
+  const row = await Otp.create({
+    sentTo: input.email, purpose: input.user ? 'password-reset' : 'signup', status: 'pending',
+    tokenHash: otpChallengeHash(input.challengeId), otpHash: otpCodeHash(input.challengeId, input.code),
+    ...(input.user ? { user: input.user } : { registrationData: { fullName: 'Isolated OTP Farmer', passwordHash: input.passwordHash, role: 'farmer' } }),
+    attempts: 0, resendAttempts: 0, expiresAt: input.expiresAt ?? new Date(Date.now() + 10 * 60 * 1000),
+    createdAt: new Date(), updatedAt: new Date(),
+  });
+  otpFixtureIds.push(row._id);
+  return row;
+}
+
+async function csrf(agent: ReturnType<typeof request.agent>, realm: 'marketplace' | 'admin' = 'marketplace') {
+  const response = await agent.get(realm === 'admin' ? '/api/v1/auth/admin/csrf' : '/api/v1/auth/csrf');
   assert(response.status === 200, 'Could not obtain the CSRF token.');
   return String(response.body?.data?.csrfToken ?? '');
+}
+
+function setCookieLine(response: any, name: string): string | undefined {
+  const headers = response.headers?.['set-cookie'];
+  const rows = Array.isArray(headers) ? headers : typeof headers === 'string' ? [headers] : [];
+  return rows.find((value: string) => value.startsWith(`${name}=`));
+}
+function cookiePair(response: any, name: string): string | undefined {
+  return setCookieLine(response, name)?.split(';', 1)[0];
 }
 
 async function login(agent: ReturnType<typeof request.agent>, token: string, email: string, role: 'farmer' | 'buyer') {
   const response = await agent.post('/api/v1/auth/login').set('X-CSRF-Token', token).send({ email, password, role });
   assert(response.status === 200, `The ${role} session could not be created (${response.status}).`);
-  return response.body.data.user;
+  const sessionCookie = cookiePair(response, getConfig().USER_COOKIE_NAME);
+  assert(sessionCookie, 'The marketplace login did not set its configured session cookie.');
+  return { user: response.body.data.user, sessionCookie };
 }
 
 try {
@@ -61,25 +106,53 @@ try {
   await initializeDatabase(databaseName);
   const passwordHash = await hashPassword(password);
   const [farmer, buyer, admin, category] = await Promise.all([
-    User.create({ email: `farmer-${suffix}@example.test`, fullName: 'Isolated Test Farmer', role: 'farmer', passwordHash, isActive: true, isDeleted: false, isEmailVerified: true, county: 'Kiambu', createdAt: new Date() }),
+    User.create({ email: `farmer-${suffix}@example.test`, fullName: 'Isolated Test Farmer', role: 'farmer', passwordHash, isActive: true, isDeleted: false, isEmailVerified: true, verificationStatus: 'pending', county: 'Kiambu', createdAt: new Date() }),
     User.create({ email: `buyer-${suffix}@example.test`, fullName: 'Isolated Test Buyer', role: 'buyer', passwordHash, isActive: true, isDeleted: false, isEmailVerified: true, county: 'Kiambu', createdAt: new Date() }),
     User.create({ email: `admin-${suffix}@example.test`, fullName: 'Isolated Test Administrator', role: 'super_admin', passwordHash, isActive: true, isDeleted: false, isEmailVerified: true, createdAt: new Date() }),
     Category.create({ name: `Isolated Test Category ${suffix}`, slug: `isolated-test-${suffix}`, isActive: true, createdAt: new Date() }),
   ]);
   farmerId = farmer._id; buyerId = buyer._id; adminId = admin._id; categoryId = category._id;
+  roleTargetId = (await User.create({ email: `role-target-${suffix}@example.test`, fullName: 'Isolated Role Target', role: 'buyer', passwordHash, isActive: true, isDeleted: false, isEmailVerified: true, createdAt: new Date() }))._id;
 
   const farmerAgent = request.agent(app);
   const farmerCsrf = await csrf(farmerAgent);
-  await login(farmerAgent, farmerCsrf, farmer.email, 'farmer');
+  const farmerLogin = await login(farmerAgent, farmerCsrf, farmer.email, 'farmer');
+  const emptyFarmerProfile = await farmerAgent.get('/api/v1/profiles/me');
+  const invalidFarmCreate = await farmerAgent.post('/api/v1/profiles/me').set('X-CSRF-Token', farmerCsrf).send({ profile: { farmName: `Isolated farm ${suffix}` } });
+  const farmerProfileSave = await farmerAgent.post('/api/v1/profiles/me').set('X-CSRF-Token', farmerCsrf).send({ profile: { farmName: `Isolated farm ${suffix}`, county: 'Kiambu', mainCrops: ['Isolated maize'] } });
+  const persistedFarmerProfile = await FarmerProfile.findOne({ user: farmerId }).lean();
+  assert(emptyFarmerProfile.status === 200 && emptyFarmerProfile.body.data.profile === null && invalidFarmCreate.status === 422 && invalidFarmCreate.body.code === 'COUNTY_REQUIRED' && farmerProfileSave.status === 201 && farmerProfileSave.body.data.role === 'farmer' && persistedFarmerProfile?.farmName === `Isolated farm ${suffix}`, `Farm profile create invariant failed (${JSON.stringify({ emptyStatus: emptyFarmerProfile.status, invalidStatus: invalidFarmCreate.status, invalidCode: invalidFarmCreate.body.code, createStatus: farmerProfileSave.status, createCode: farmerProfileSave.body.code, returnedRole: farmerProfileSave.body.data?.role, persistedFarmName: Boolean(persistedFarmerProfile?.farmName) })}).`);
+  const partialProfileUpdate = await farmerAgent.patch('/api/v1/profiles/me').set('X-CSRF-Token', farmerCsrf).send({ profile: { about: 'An isolated test description.' } });
+  const profileAfterPartialUpdate = await farmerAgent.get('/api/v1/profiles/me');
+  const invalidProfileUpdate = await farmerAgent.patch('/api/v1/profiles/me').set('X-CSRF-Token', farmerCsrf).send({ profile: { farmSize: 'not-a-number' } });
+  const protectedProfileUpdate = await farmerAgent.patch('/api/v1/profiles/me').set('X-CSRF-Token', farmerCsrf).send({ role: 'super_admin', profile: { about: 'Must not be persisted.' } });
+  assert(partialProfileUpdate.status === 200 && partialProfileUpdate.body.data.profile.about === 'An isolated test description.' && profileAfterPartialUpdate.body.data.profile.farmName === `Isolated farm ${suffix}` && invalidProfileUpdate.status === 422 && invalidProfileUpdate.body.field === 'farmSize' && protectedProfileUpdate.status === 422 && protectedProfileUpdate.body.field === 'role', 'Role-profile PATCH did not preserve untouched fields, report field errors, and reject protected outer fields.');
+  const privacySaved = await farmerAgent.patch('/api/v1/profiles/me').set('X-CSRF-Token', farmerCsrf).send({ profile: { privacyPreferences: { showSellerName: false, showLocation: false, shareContactInformation: true } } });
+  assert(privacySaved.status === 200 && privacySaved.body.data.profile.privacyPreferences.showSellerName === false, 'Farmer privacy preferences were not persisted on the authenticated profile.');
+  const defaultPreferences = await farmerAgent.get('/api/v1/users/account-preferences');
+  const preferenceSaved = await farmerAgent.patch('/api/v1/users/account-preferences').set('X-CSRF-Token', farmerCsrf).send({ defaultListingUnit: 'crate' });
+  const savedPreferences = await farmerAgent.get('/api/v1/users/account-preferences');
+  assert(defaultPreferences.status === 200 && defaultPreferences.body.data.preferences.defaultListingUnit === null && preferenceSaved.status === 200 && savedPreferences.body.data.preferences.defaultListingUnit === 'crate', 'Farmer account preferences did not persist and reload.');
+  const archivedFarmerProfile = await farmerAgent.delete('/api/v1/profiles/me').set('X-CSRF-Token', farmerCsrf).send({});
+  const hiddenArchivedProfile = await farmerAgent.get('/api/v1/profiles/me');
+  const restoredFarmerProfile = await farmerAgent.patch('/api/v1/profiles/me').set('X-CSRF-Token', farmerCsrf).send({ profile: { farmName: `Restored farm ${suffix}` } });
+  assert(archivedFarmerProfile.status === 200 && hiddenArchivedProfile.status === 200 && hiddenArchivedProfile.body.data.profile === null && restoredFarmerProfile.status === 200 && restoredFarmerProfile.body.data.profile.farmName === `Restored farm ${suffix}` && (await FarmerProfile.findOne({ user: farmerId }).lean() as any)?.isActive === true, 'Farmer profile archive or explicit restoration behavior was incorrect.');
   const createdListing = await farmerAgent.post('/api/v1/products').set('X-CSRF-Token', farmerCsrf).send({
-    name: `Isolated test produce ${suffix}`, category: category.name, price: 125, stock: 10, measurementUnit: 'kg', description: 'Isolated end-to-end test record.',
+    name: `Isolated test produce ${suffix}`, category: String(categoryId), price: 125, stock: 10, measurementUnit: 'kg', description: 'Isolated end-to-end test record.', location: 'User supplied pickup location',
   });
   assert(createdListing.status === 201, `Farmer listing creation failed (${createdListing.status}).`);
+  assert(createdListing.body.data.category?.id === String(categoryId) && createdListing.body.data.location === null && createdListing.body.data.farmer?.fullName === null && createdListing.body.data.farmer?.contactInformation?.email === farmer.email, 'Listing creation lost the real category/location or failed to enforce opt-in privacy fields.');
   productId = new mongoose.Types.ObjectId(createdListing.body.data.id);
   const savedProduct = await Product.findById(productId).lean();
   assert(savedProduct?.priceCents === 12500 && savedProduct?.quantityAvailable === 10, 'The listing did not persist its authoritative price and stock.');
   const feed = await request(app).get('/api/v1/products').query({ search: suffix });
   assert(feed.status === 200 && feed.body.data.some((row: any) => row.id === String(productId)), 'The persisted listing did not appear in marketplace search.');
+  const uploadedPicture = await farmerAgent.post('/api/v1/upload/image').set('X-CSRF-Token', farmerCsrf).field('purpose', 'profile').attach('file', Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pQAAAABJRU5ErkJggg==', 'base64'), { filename: 'isolated-profile.png', contentType: 'image/png' });
+  if (uploadedPicture.status === 201 && typeof uploadedPicture.body.data?.filename === 'string') testUploadFilename = uploadedPicture.body.data.filename;
+  const profileAfterUpload = await farmerAgent.get('/api/v1/users/my-profile');
+  assert(uploadedPicture.status === 201 && profileAfterUpload.status === 200 && profileAfterUpload.body.data.user.image === uploadedPicture.body.data.imageUrl, 'The uploaded profile image was not persisted to the authenticated account response.');
+  const removedPicture = await farmerAgent.delete('/api/v1/upload/image').set('X-CSRF-Token', farmerCsrf).send({});
+  assert(removedPicture.status === 200, `The farmer could not remove their own uploaded profile image (${removedPicture.status}/${removedPicture.body.code ?? 'no-code'}).`);
 
   const buyerAgent = request.agent(app);
   const buyerCsrf = await csrf(buyerAgent);
@@ -90,19 +163,17 @@ try {
   const farmerConversation = await farmerAgent.get('/api/v1/messages/conversations');
   const farmerInquiry = farmerConversation.body.data.conversations.find((row: any) => row.id === String(conversationId));
   assert(farmerConversation.status === 200 && farmerInquiry?.listingName === `Isolated test produce ${suffix}` && farmerInquiry?.message === `Isolated produce inquiry ${suffix}.` && farmerInquiry?.recipient?.email === buyer.email && farmerInquiry?.status === 'Open', 'The farmer did not receive the real buyer and listing details for the inquiry.');
+  const repliedWithoutText = await farmerAgent.patch(`/api/v1/messages/conversations/${conversationId}/status`).set('X-CSRF-Token', farmerCsrf).send({ status: 'replied' });
+  assert(repliedWithoutText.status === 409 && repliedWithoutText.body.code === 'REPLY_REQUIRED', 'A Farmer inquiry was marked replied without a persisted message.');
   const farmerUnreadMessages = await farmerAgent.get('/api/v1/chat/unread-count');
   assert(farmerUnreadMessages.status === 200 && farmerUnreadMessages.body.data.count === 1, 'The farmer unread-message count did not include the new message notification.');
   const sentReply = await farmerAgent.post('/api/v1/messages/send-message').set('X-CSRF-Token', farmerCsrf).send({ chatId: String(conversationId), text: 'The listed produce is available for collection.' });
-  assert(sentReply.status === 201 && sentReply.body.data.status === 'Replied', 'The farmer reply was not persisted as a conversation response.');
+  assert(sentReply.status === 201 && sentReply.body.data.status === 'Replied' && sentReply.body.data.conversation?.messages?.some((message: any) => message.text === 'The listed produce is available for collection.' && message.fromCurrentUser), 'The farmer reply or updated conversation history was not persisted and returned.');
   const buyerConversation = await buyerAgent.get('/api/v1/messages/conversations');
   const buyerInquiry = buyerConversation.body.data.conversations.find((row: any) => row.id === String(conversationId));
   assert(buyerInquiry?.reply === 'The listed produce is available for collection.' && buyerInquiry?.status === 'Replied', 'The buyer did not see the persisted farmer reply and status.');
   const buyerStatusGate = await buyerAgent.patch(`/api/v1/messages/conversations/${conversationId}/status`).set('X-CSRF-Token', buyerCsrf).send({ status: 'closed' });
   assert(buyerStatusGate.status === 403, 'A buyer changed farmer-owned inquiry status.');
-  const closeInquiry = await farmerAgent.patch(`/api/v1/messages/conversations/${conversationId}/status`).set('X-CSRF-Token', farmerCsrf).send({ status: 'closed' });
-  assert(closeInquiry.status === 200 && closeInquiry.body.data.status === 'Closed', 'The farmer could not persist a conversation close action.');
-  const buyerClosedConversation = await buyerAgent.get('/api/v1/messages/conversations');
-  assert(buyerClosedConversation.body.data.conversations.find((row: any) => row.id === String(conversationId))?.status === 'Closed', 'The buyer did not see the persisted closed status.');
   const farmerNotifications = await farmerAgent.get('/api/v1/notifications');
   const inquiryNotification = farmerNotifications.body.data.find((row: any) => row.metadata?.conversationId === String(conversationId));
   assert(inquiryNotification, 'The buyer message notification was not persisted for the farmer.');
@@ -116,6 +187,10 @@ try {
   const followUpMessage = await buyerAgent.post('/api/v1/messages/send-message').set('X-CSRF-Token', buyerCsrf).send({ chatId: String(conversationId), text: 'Please confirm the available quantity.' });
   const farmerUnreadAfterOptOut = await farmerAgent.get('/api/v1/chat/unread-count');
   assert(followUpMessage.status === 201 && farmerUnreadAfterOptOut.status === 200 && farmerUnreadAfterOptOut.body.data.count === 0, 'A disabled message preference still created an unread in-app alert.');
+  const closeInquiry = await farmerAgent.patch(`/api/v1/messages/conversations/${conversationId}/status`).set('X-CSRF-Token', farmerCsrf).send({ status: 'closed' });
+  assert(closeInquiry.status === 200 && closeInquiry.body.data.status === 'Closed', 'The farmer could not persist a conversation close action.');
+  const buyerClosedConversation = await buyerAgent.get('/api/v1/messages/conversations');
+  assert(buyerClosedConversation.body.data.conversations.find((row: any) => row.id === String(conversationId))?.status === 'Closed', 'The buyer did not see the persisted closed status.');
   const excessiveRequest = await buyerAgent.post('/api/v1/purchase-requests').set('X-CSRF-Token', buyerCsrf).send({ listingId: String(productId), quantity: 11, proposedPrice: 1 });
   assert(excessiveRequest.status === 422 && excessiveRequest.body.code === 'REQUEST_QUANTITY_EXCEEDS_STOCK', 'The purchase-request API allowed quantities above authoritative stock.');
   const purchaseRequest = await buyerAgent.post('/api/v1/purchase-requests').set('X-CSRF-Token', buyerCsrf).send({ listingId: String(productId), quantity: 2, proposedPrice: 120, note: 'Please confirm collection availability.' });
@@ -162,6 +237,8 @@ try {
   assert(mpesaUnavailable.status === 503 && mpesaUnavailable.body.code === 'MPESA_NOT_CONFIGURED', 'M-Pesa reported success while its sandbox credentials were absent.');
   assert(paypalUnavailable.status === 503 && paypalUnavailable.body.code === 'PAYPAL_NOT_CONFIGURED', 'PayPal reported success while its sandbox credentials were absent.');
   assert(await Payment.countDocuments({ order: orderId }) === 0, 'An unconfigured payment provider created a payment record.');
+  const isolatedPaymentFixture = await Payment.create({ order: new mongoose.Types.ObjectId(orderId), payer: buyerId, provider: 'isolated_test_fixture', status: 'pending', amountCents: 37500, currency: 'KES', transactionId: `fixture-${suffix}`, createdAt: new Date() });
+  testPaymentId = isolatedPaymentFixture._id;
   for (const stage of ['confirmed', 'packed', 'in_transit', 'delivered']) {
     const updated = await farmerAgent.patch(`/api/v1/order/${orderId}/delivery-stage`).set('X-CSRF-Token', farmerCsrf).send({ stage });
     const savedStage: any = await Order.findById(orderId).lean();
@@ -190,19 +267,241 @@ try {
   assert(farmerAdminGate.status === 403, 'A farmer reached administrator-only market-source data.');
 
   const adminAgent = request.agent(app);
-  const adminCsrf = await csrf(adminAgent);
-  const adminLogin = await adminAgent.post('/api/v1/auth/admin/login').set('X-CSRF-Token', adminCsrf).send({ email: admin.email, password });
+  const adminCsrf = await csrf(adminAgent, 'admin');
+  const adminLogin = await adminAgent.post('/api/v1/auth/admin/login').set('X-CSRF-Token', adminCsrf).send({ username: admin.email, password });
   assert(adminLogin.status === 200, 'The isolated administrator session could not be created.');
-  const contactMessage = await adminAgent.post('/api/v1/contact-message').set('X-CSRF-Token', adminCsrf).send({ name: `Isolated contact ${suffix}`, email: `contact-${suffix}@example.test`, subject: 'E2E support workflow', message: 'This support request is stored only in the isolated database.' });
+  const adminCookieName = getConfig().ADMIN_COOKIE_NAME;
+  const adminSessionCookie = cookiePair(adminLogin, adminCookieName);
+  assert(adminSessionCookie, 'The administrator login did not set its configured realm cookie.');
+  assert(setCookieLine(adminLogin, adminCookieName)?.includes('HttpOnly'), 'The administrator session cookie is not HttpOnly.');
+  assert(getConfig().USER_COOKIE_NAME !== adminCookieName && farmerLogin.sessionCookie.startsWith(`${getConfig().USER_COOKIE_NAME}=`), 'Marketplace and administrator cookie realms are not configured independently.');
+  const combinedSessionCookies = `${farmerLogin.sessionCookie}; ${adminSessionCookie}; agrilink.csrf=${encodeURIComponent(farmerCsrf)}; agrilink.admin.csrf=${encodeURIComponent(adminCsrf)}`;
+  const combinedMarketplaceIdentity = await request(app).get('/api/v1/auth/me').set('Cookie', combinedSessionCookies);
+  const combinedAdminIdentity = await request(app).get('/api/v1/auth/admin/session').set('Cookie', combinedSessionCookies);
+  const adminCookieOnMarketplaceRoute = await request(app).get('/api/v1/product/seller').set('Cookie', `${adminSessionCookie}`);
+  const farmerCookieOnAdminRoute = await request(app).get('/api/v1/auth/admin/session').set('Cookie', farmerLogin.sessionCookie);
+  assert(combinedMarketplaceIdentity.status === 200 && combinedMarketplaceIdentity.body.data.user.id === String(farmerId), 'Combined browser cookies did not resolve the marketplace identity from the Farmer session.');
+  assert(combinedAdminIdentity.status === 200 && combinedAdminIdentity.body.data.administrator.id === String(adminId), 'Combined browser cookies did not resolve the administrator identity from the Admin session.');
+  assert(adminCookieOnMarketplaceRoute.status === 403 && adminCookieOnMarketplaceRoute.body.code === 'SESSION_REALM_MISMATCH' && farmerCookieOnAdminRoute.status === 403 && farmerCookieOnAdminRoute.body.code === 'SESSION_REALM_MISMATCH', 'A session crossed into the other application realm.');
+  const restoredAdminSession = await adminAgent.get('/api/v1/auth/admin/session');
+  assert(restoredAdminSession.status === 200 && restoredAdminSession.body.data.administrator.id === String(adminId), 'The administrator session did not restore from its cookie.');
+  const createdAdminCategory = await adminAgent.post('/api/v1/admin/categories').set('X-CSRF-Token', adminCsrf).send({ name: `API Category ${suffix}` });
+  assert(createdAdminCategory.status === 201 && createdAdminCategory.body.data.slug === `api-category-${suffix}`, 'The administrator category create action did not persist a normalized slug.');
+  adminCreatedCategoryId = new mongoose.Types.ObjectId(createdAdminCategory.body.data.id);
+  const adminCategoryList = await adminAgent.get('/api/v1/admin/categories').query({ search: `api-category-${suffix}`, page: 1, limit: 10 });
+  assert(adminCategoryList.status === 200 && adminCategoryList.body.data.categories.some((row: any) => row.id === String(adminCreatedCategoryId)) && adminCategoryList.body.data.meta.total === 1, 'The administrator category search did not return the persisted category.');
+  const publicCategoryList = await request(app).get('/api/v1/categories');
+  assert(publicCategoryList.status === 200 && publicCategoryList.body.data.some((row: any) => row.id === String(adminCreatedCategoryId)), 'The public category API did not expose the active administrator-created category.');
+  const invalidCategorySlug = await adminAgent.post('/api/v1/admin/categories').set('X-CSRF-Token', adminCsrf).send({ name: `Invalid Category ${suffix}`, slug: 'Invalid Slug!' });
+  assert(invalidCategorySlug.status === 422 && invalidCategorySlug.body.code === 'VALIDATION_FAILED', 'The administrator category API accepted an invalid explicit slug.');
+  const duplicateCategorySlug = await adminAgent.post('/api/v1/admin/categories').set('X-CSRF-Token', adminCsrf).send({ name: `Duplicate Category ${suffix}`, slug: createdAdminCategory.body.data.slug });
+  assert(duplicateCategorySlug.status === 409 && duplicateCategorySlug.body.code === 'CATEGORY_SLUG_CONFLICT', 'The category API allowed a duplicate slug.');
+  const updatedAdminCategory = await adminAgent.patch(`/api/v1/admin/categories/${adminCreatedCategoryId}`).set('X-CSRF-Token', adminCsrf).send({ name: `Renamed Category ${suffix}`, isActive: false });
+  assert(updatedAdminCategory.status === 200 && updatedAdminCategory.body.data.slug === `renamed-category-${suffix}` && updatedAdminCategory.body.data.isActive === false, 'The administrator category rename did not update its slug and active state.');
+  const publicCategoryAfterDeactivation = await request(app).get('/api/v1/categories');
+  assert(publicCategoryAfterDeactivation.status === 200 && !publicCategoryAfterDeactivation.body.data.some((row: any) => row.id === String(adminCreatedCategoryId)), 'A deactivated administrator category remained visible to marketplace clients.');
+  const adminListingDetails = await adminAgent.get(`/api/v1/admin/products/${productId}/details`);
+  assert(adminListingDetails.status === 200 && adminListingDetails.body.data.listing.id === String(productId) && adminListingDetails.body.data.seller.id === String(farmerId) && adminListingDetails.body.data.listing.price === 125, 'The administrator listing details did not resolve its persisted listing, seller, and price.');
+  const farmerListingDetailsGate = await farmerAgent.get(`/api/v1/admin/products/${productId}/details`);
+  assert(farmerListingDetailsGate.status === 403, 'A farmer accessed administrator listing details.');
+  const todayForLedger = new Date().toISOString().slice(0, 10);
+  const adminLedger = await adminAgent.get('/api/v1/admin/ledger').query({ page: 1, limit: 25, search: orderId, status: 'delivered', type: 'order', from: todayForLedger, to: todayForLedger });
+  assert(adminLedger.status === 200 && adminLedger.body.data.length === 1 && adminLedger.body.data[0].orderId === orderId && adminLedger.body.meta.total === 1, 'The administrator ledger did not filter and page the persisted order.');
+  const adminOrderDetails = await adminAgent.get(`/api/v1/admin/ledger/order/${orderId}`);
+  assert(adminOrderDetails.status === 200 && adminOrderDetails.body.data.buyer.id === String(buyerId) && adminOrderDetails.body.data.farmer.id === String(farmerId) && adminOrderDetails.body.data.items[0].name === `Isolated test produce ${suffix}` && adminOrderDetails.body.data.payments[0]?.id === String(testPaymentId) && adminOrderDetails.body.data.payments[0]?.status === 'pending', 'The administrator order detail did not resolve real buyer, farmer, items, and payment state.');
+  const adminPaymentDetails = await adminAgent.get(`/api/v1/admin/ledger/payment/${testPaymentId}`);
+  assert(adminPaymentDetails.status === 200 && adminPaymentDetails.body.data.payer.id === String(buyerId) && adminPaymentDetails.body.data.order.id === orderId && adminPaymentDetails.body.data.status === 'pending' && adminPaymentDetails.body.data.reference === `fixture-${suffix}`, 'The administrator payment detail did not resolve its persisted payer, order, and provider status.');
+  const paymentOnlyLedger = await adminAgent.get('/api/v1/admin/ledger').query({ page: 1, limit: 25, type: 'payment' });
+  assert(paymentOnlyLedger.status === 200 && paymentOnlyLedger.body.data.length === 1 && paymentOnlyLedger.body.data[0].recordType === 'payment' && paymentOnlyLedger.body.data[0].id === String(testPaymentId) && paymentOnlyLedger.body.meta.total === 1, 'The payment-only ledger returned an order or failed to retrieve its isolated persisted payment fixture.');
+  const invalidLedgerDates = await adminAgent.get('/api/v1/admin/ledger').query({ from: '2026-10-31', to: '2026-10-01' });
+  assert(invalidLedgerDates.status === 422 && invalidLedgerDates.body.code === 'INVALID_DATE_RANGE', 'The administrator ledger accepted a reversed date range.');
+  const farmerLedgerGate = await farmerAgent.get('/api/v1/admin/ledger');
+  assert(farmerLedgerGate.status === 403, 'A farmer accessed the administrator financial ledger.');
+  const farmerOrderDetailsGate = await farmerAgent.get(`/api/v1/admin/ledger/order/${orderId}`);
+  assert(farmerOrderDetailsGate.status === 403, 'A farmer accessed administrator order details.');
+  const farmerPaymentDetailsGate = await farmerAgent.get(`/api/v1/admin/ledger/payment/${testPaymentId}`);
+  assert(farmerPaymentDetailsGate.status === 403, 'A farmer accessed administrator payment details.');
+  const securitySettings = await adminAgent.get('/api/v1/admin/settings/security');
+  const notificationSettings = await adminAgent.get('/api/v1/admin/settings/notifications');
+  const aiUsage = await adminAgent.get('/api/v1/admin/ai/usage');
+  assert(securitySettings.status === 200 && securitySettings.body.data.sessionCookie.httpOnly === true && securitySettings.body.data.csrfProtection === 'enabled' && !JSON.stringify(securitySettings.body.data).includes('SESSION_SECRET'), 'Security settings did not report safe backend session configuration.');
+  assert(notificationSettings.status === 200 && notificationSettings.body.data.channels.inApp === 'available' && ['configured', 'unavailable'].includes(notificationSettings.body.data.channels.email), 'Notification settings did not report actual configured delivery channels.');
+  assert(aiUsage.status === 200 && Number.isFinite(aiUsage.body.data.totalRequests) && Number.isFinite(aiUsage.body.data.failedRequests), 'AI usage monitoring did not return backend telemetry counts.');
+  const invalidCurrencySetting = await adminAgent.patch('/api/v1/admin/settings').set('X-CSRF-Token', adminCsrf).send({ defaultCurrency: 'not-a-currency' });
+  assert(invalidCurrencySetting.status === 422 && invalidCurrencySetting.body.code === 'INVALID_SETTING', 'The platform settings endpoint accepted an invalid currency.');
+  const featureKeys = ['marketplaceEnabled', 'registrationEnabled'];
+  previousPlatformSettings = await Setting.find({ scope: 'platform', key: { $in: featureKeys } }).lean();
+  platformSettingsTestStartedAt = new Date();
+  const platformDisabled = await adminAgent.patch('/api/v1/admin/settings').set('X-CSRF-Token', adminCsrf).send({ marketplaceEnabled: false, registrationEnabled: false });
+  testPlatformSettings = await Setting.find({ scope: 'platform', key: { $in: featureKeys } }).lean();
+  assert(platformDisabled.status === 200 && testPlatformSettings.length === 2, 'Platform feature settings did not persist through the administrator API.');
+  const blockedRegistration = await farmerAgent.post('/api/v1/signup/create').set('X-CSRF-Token', farmerCsrf).send({ fullName: 'Blocked Registration', email: `blocked-${suffix}@example.test`, password, role: 'buyer' });
+  const blockedMarketplace = await request(app).get('/api/v1/products');
+  assert(blockedRegistration.status === 503 && blockedRegistration.body.code === 'REGISTRATION_DISABLED', 'The registration setting did not prevent new account registration.');
+  assert(blockedMarketplace.status === 503 && blockedMarketplace.body.code === 'MARKETPLACE_DISABLED', 'The marketplace setting did not block public marketplace access.');
+  const retiredMaintenanceSetting = await adminAgent.patch('/api/v1/admin/settings').set('X-CSRF-Token', adminCsrf).send({ maintenanceMode: true });
+  const userOperationDuringRetiredMaintenance = await farmerAgent.get('/api/v1/messages/conversations');
+  assert(retiredMaintenanceSetting.status === 422 && retiredMaintenanceSetting.body.code === 'SETTING_NOT_ALLOWED' && userOperationDuringRetiredMaintenance.status === 200, 'The retired maintenance setting remained configurable or continued to block Farmer/Buyer operations.');
+  const platformRestored = await adminAgent.patch('/api/v1/admin/settings').set('X-CSRF-Token', adminCsrf).send({ marketplaceEnabled: true, registrationEnabled: true });
+  const restoredMarketplace = await request(app).get('/api/v1/products');
+  assert(platformRestored.status === 200 && restoredMarketplace.status === 200, 'Re-enabling the platform features did not restore marketplace access.');
+
+  const logoutAgent = request.agent(app);
+  const logoutCsrf = await csrf(logoutAgent, 'admin');
+  const logoutLogin = await logoutAgent.post('/api/v1/auth/admin/login').set('X-CSRF-Token', logoutCsrf).send({ email: admin.email, password });
+  assert(logoutLogin.status === 200, 'A second isolated administrator session could not be created for logout verification.');
+  const logoutAdminCookie = cookiePair(logoutLogin, adminCookieName);
+  assert(logoutAdminCookie, 'The second administrator login did not set its realm cookie.');
+  const logoutCookieHeader = `${farmerLogin.sessionCookie}; ${logoutAdminCookie}; agrilink.admin.csrf=${encodeURIComponent(logoutCsrf)}`;
+  const logoutResult = await request(app).post('/api/v1/auth/admin/logout').set('Cookie', logoutCookieHeader).set('X-CSRF-Token', logoutCsrf).send({});
+  const afterLogout = await request(app).get('/api/v1/auth/admin/session').set('Cookie', logoutAdminCookie);
+  const farmerAfterAdminLogoutInPlatformCheck = await request(app).get('/api/v1/auth/me').set('Cookie', farmerLogin.sessionCookie);
+  assert(logoutResult.status === 200 && logoutResult.body.data.serverInvalidated === true && afterLogout.status === 401 && farmerAfterAdminLogoutInPlatformCheck.status === 200, 'Administrator logout did not revoke only its own session while preserving the concurrent Farmer session.');
+
+  const expiryAgent = request.agent(app);
+  const expiryCsrf = await csrf(expiryAgent, 'admin');
+  const expiryLogin = await expiryAgent.post('/api/v1/auth/admin/login').set('X-CSRF-Token', expiryCsrf).send({ username: admin.email, password });
+  const expirySetCookies = expiryLogin.headers['set-cookie'];
+  const expiryCookie = (Array.isArray(expirySetCookies) ? expirySetCookies : typeof expirySetCookies === 'string' ? [expirySetCookies] : []).find((value: string) => value.startsWith(`${adminCookieName}=`));
+  const rawExpiryToken = expiryCookie?.match(/^[^=]+=([^;]+)/)?.[1];
+  assert(expiryLogin.status === 200 && rawExpiryToken, 'The administrator expiry session could not be created.');
+  const expiryTokenHash = createHash('sha256').update(rawExpiryToken).digest('hex');
+  const expiredRecord = await RefreshToken.updateOne({ tokenHash: expiryTokenHash }, { $set: { expiresAt: new Date(Date.now() - 1000) } });
+  const expiredSession = await expiryAgent.get('/api/v1/auth/admin/session');
+  assert(expiredRecord.modifiedCount === 1 && expiredSession.status === 401, 'An expired administrator session remained valid.');
+
+  const targetAdmin = await User.create({ email: `secondary-admin-${suffix}@example.test`, fullName: 'Isolated Secondary Administrator', role: 'admin', passwordHash, isActive: true, isDeleted: false, isEmailVerified: true, createdAt: new Date() });
+  targetAdminId = targetAdmin._id;
+  const updatedFarmerProfile = await adminAgent.patch(`/api/v1/admin/users/details/${farmerId}`).set('X-CSRF-Token', adminCsrf).send({ fullName: 'Updated Isolated Farmer', phone: '+254700000111', county: 'Nakuru' });
+  const savedFarmerProfile: any = await User.findById(farmerId).lean();
+  const protectedAdminProfile = await adminAgent.patch(`/api/v1/admin/users/details/${targetAdminId}`).set('X-CSRF-Token', adminCsrf).send({ fullName: 'Attempted Administrator Edit' });
+  assert(updatedFarmerProfile.status === 200 && savedFarmerProfile?.fullName === 'Updated Isolated Farmer' && savedFarmerProfile?.phone === '+254700000111' && savedFarmerProfile?.county === 'Nakuru', 'Permitted administrator account-profile editing did not persist.');
+  assert(protectedAdminProfile.status === 409 && protectedAdminProfile.body.code === 'ADMIN_PROFILE_UPDATE_RESTRICTED', 'General user-profile editing changed a protected administrator identity.');
+  const customRoleResponse = await adminAgent.post('/api/v1/admin/roles').set('X-CSRF-Token', adminCsrf).send({ name: `Isolated verifier ${suffix}`, permissions: ['users.read', 'users.verify'] });
+  assert(customRoleResponse.status === 201 && customRoleResponse.body.data.permissions.includes('users.verify'), 'AgriLink Control could not create a custom permission role.');
+  const customRoleId = customRoleResponse.body.data.id;
+  const assignedAdminRole = await adminAgent.patch(`/api/v1/admin/administrators/${targetAdminId}/role`).set('X-CSRF-Token', adminCsrf).send({ roleId: customRoleId });
+  const assignedTarget: any = await User.findById(targetAdminId).lean();
+  assert(assignedAdminRole.status === 200 && String(assignedTarget?.adminRoleId) === customRoleId, 'The custom administrator role assignment did not persist.');
+  const updatedCustomRole = await adminAgent.patch(`/api/v1/admin/roles/${customRoleId}`).set('X-CSRF-Token', adminCsrf).send({ permissions: ['users.read'] });
+  const savedCustomRole: any = await AdminRole.findById(customRoleId).lean();
+  assert(updatedCustomRole.status === 200 && savedCustomRole?.permissions.length === 1 && savedCustomRole.permissions[0] === 'users.read', 'Custom role permission updates did not persist.');
+  const genericAdminSuspension = await adminAgent.patch(`/api/v1/admin/users/${targetAdminId}/block`).set('X-CSRF-Token', adminCsrf).send({});
+  assert(genericAdminSuspension.status === 409 && genericAdminSuspension.body.code === 'ADMIN_STATUS_REQUIRES_ADMINISTRATORS_MANAGE', 'The generic user-management endpoint changed an administrator account.');
+  const suspendAdmin = await adminAgent.patch(`/api/v1/admin/administrators/${targetAdminId}/status`).set('X-CSRF-Token', adminCsrf).send({ isActive: false, reason: 'Isolated administrator status security test.' });
+  const suspendedAdmin: any = await User.findById(targetAdminId).lean();
+  const reactivateAdmin = await adminAgent.patch(`/api/v1/admin/administrators/${targetAdminId}/status`).set('X-CSRF-Token', adminCsrf).send({ isActive: true, reason: 'Restore isolated administrator test access.' });
+  assert(suspendAdmin.status === 200 && suspendedAdmin?.isActive === false && reactivateAdmin.status === 200 && (await User.findById(targetAdminId).lean())?.isActive === true, 'Administrator status did not use its dedicated audited workflow.');
+  const limitedAdminAgent = request.agent(app);
+  const limitedAdminCsrf = await csrf(limitedAdminAgent, 'admin');
+  const limitedAdminLogin = await limitedAdminAgent.post('/api/v1/auth/admin/login').set('X-CSRF-Token', limitedAdminCsrf).send({ email: `secondary-admin-${suffix}@example.test`, password });
+  const limitedAdminStatusChange = await limitedAdminAgent.patch(`/api/v1/admin/administrators/${adminId}/status`).set('X-CSRF-Token', limitedAdminCsrf).send({ isActive: false, reason: 'This delegated role must not manage administrator status.' });
+  assert(limitedAdminLogin.status === 200 && limitedAdminStatusChange.status === 403, 'A read-only administrator role changed administrator account status.');
+  const announcement = await adminAgent.post('/api/v1/admin/announcements').set('X-CSRF-Token', adminCsrf).send({ title: `Isolated notice ${suffix}`, message: 'This notice only exists in the isolated end-to-end database.' });
+  assert(announcement.status === 201 && announcement.body.data.status === 'draft', 'The administrator could not save an announcement draft.');
+  announcementId = new mongoose.Types.ObjectId(announcement.body.data.id);
+  const announcementRoleGate = await farmerAgent.patch(`/api/v1/admin/announcements/${announcementId}`).set('X-CSRF-Token', farmerCsrf).send({ status: 'published' });
+  assert(announcementRoleGate.status === 403, 'A farmer published an administrator announcement.');
+  const updateAnnouncement = await adminAgent.patch(`/api/v1/admin/announcements/${announcementId}`).set('X-CSRF-Token', adminCsrf).send({ title: `Updated isolated notice ${suffix}`, message: 'This edited notice remains only in the isolated end-to-end database.' });
+  const savedAnnouncement: any = await Announcement.findById(announcementId).lean();
+  assert(updateAnnouncement.status === 200 && savedAnnouncement?.title === `Updated isolated notice ${suffix}` && savedAnnouncement?.message.includes('edited notice'), 'The administrator could not edit persisted announcement content.');
+  const matchingAnnouncement = await adminAgent.get('/api/v1/admin/announcements').query({ search: `Updated isolated notice ${suffix}` });
+  assert(matchingAnnouncement.status === 200 && matchingAnnouncement.body.data.announcements.some((row: any) => row.id === String(announcementId)), 'Announcement search did not query matching persisted records.');
+  const publishAnnouncement = await adminAgent.patch(`/api/v1/admin/announcements/${announcementId}`).set('X-CSRF-Token', adminCsrf).send({ status: 'published' });
+  assert(publishAnnouncement.status === 200 && (await Announcement.findById(announcementId).lean())?.status === 'published', 'The administrator could not persist an announcement publication state.');
+  const createdFaq = await adminAgent.post('/api/v1/admin/faqs/manage').set('X-CSRF-Token', adminCsrf).send({ question: `Isolated FAQ ${suffix}?`, answer: 'This answer is stored only in the isolated end-to-end database.', category: 'Isolated Tests' });
+  assert(createdFaq.status === 201 && createdFaq.body.data.isActive === true, 'The administrator could not create persistent FAQ content.');
+  faqId = new mongoose.Types.ObjectId(createdFaq.body.data.id);
+  const matchingFaqs = await adminAgent.get('/api/v1/admin/faqs/manage').query({ search: suffix });
+  assert(matchingFaqs.status === 200 && matchingFaqs.body.data.some((row: any) => row.id === String(faqId)), 'FAQ search did not query matching persisted records.');
+  const publicFaqs = await request(app).get('/api/v1/faq');
+  assert(publicFaqs.status === 200 && publicFaqs.body.data.some((row: any) => row.id === String(faqId) && row.category === 'Isolated Tests'), 'The public FAQ endpoint did not return the persisted administrator content.');
+  const farmerFaqGate = await farmerAgent.patch(`/api/v1/admin/faqs/manage/${faqId}`).set('X-CSRF-Token', farmerCsrf).send({ isActive: false });
+  assert(farmerFaqGate.status === 403, 'A farmer changed administrator-managed FAQ content.');
+  const updatedFaq = await adminAgent.patch(`/api/v1/admin/faqs/manage/${faqId}`).set('X-CSRF-Token', adminCsrf).send({ answer: 'The answer was updated by an administrator.', isActive: false });
+  assert(updatedFaq.status === 200 && (await FAQ.findById(faqId).lean())?.answer === 'The answer was updated by an administrator.', 'The administrator could not update persisted FAQ content.');
+  const hiddenFaqs = await request(app).get('/api/v1/faq');
+  assert(hiddenFaqs.status === 200 && hiddenFaqs.body.data.every((row: any) => row.id !== String(faqId)), 'An inactive FAQ remained publicly visible.');
+  const sentAdminNotification = await adminAgent.post('/api/v1/admin/notifications').set('X-CSRF-Token', adminCsrf).send({ email: farmer.email, title: `Isolated notice ${suffix}`, message: 'This notification exists only in the isolated end-to-end database.' });
+  assert(sentAdminNotification.status === 201, 'The administrator could not create an in-app notification for an existing account.');
+  const farmerAdminNotificationList = await farmerAgent.get('/api/v1/notifications');
+  assert(farmerAdminNotificationList.status === 200 && farmerAdminNotificationList.body.data.some((row: any) => row.id === sentAdminNotification.body.data.id), 'The selected account could not retrieve its administrator notification.');
+  const matchingAdminNotifications = await adminAgent.get('/api/v1/admin/notifications').query({ search: suffix });
+  assert(matchingAdminNotifications.status === 200 && matchingAdminNotifications.body.data.some((row: any) => row.id === sentAdminNotification.body.data.id), 'Administrator notification search did not return the saved record.');
+  const farmerNotificationAdminGate = await farmerAgent.get('/api/v1/admin/notifications');
+  assert(farmerNotificationAdminGate.status === 403, 'A Farmer accessed the administrator notification management view.');
+  const verificationList = await adminAgent.get('/api/v1/admin/users/verifications').query({ status: 'pending', search: suffix });
+  assert(verificationList.status === 200 && verificationList.body.data.some((row: any) => row.id === String(farmerId) && row.verificationStatus === 'pending'), 'The administrator verification queue did not return the actual pending user.');
+  const accountPage = await adminAgent.get('/api/v1/admin/users/all-users').query({ role: 'farmer', status: 'active', search: suffix, page: 1, limit: 1 });
+  assert(accountPage.status === 200 && accountPage.body.data.length === 1 && accountPage.body.data[0].id === String(farmerId) && accountPage.body.meta.total === 1 && accountPage.body.meta.pages === 1, 'Administrator account search, role/status filters, or page metadata did not match persisted users.');
+  const farmerDetails = await adminAgent.get(`/api/v1/admin/users/details/${farmerId}`);
+  assert(farmerDetails.status === 200 && farmerDetails.body.data.user.id === String(farmerId) && farmerDetails.body.data.user.status === 'active' && !('passwordHash' in farmerDetails.body.data.user), 'Administrator account details were missing or exposed a password field.');
+  const farmerDetailsGate = await farmerAgent.get(`/api/v1/admin/users/details/${farmerId}`);
+  assert(farmerDetailsGate.status === 403, 'A farmer accessed administrator account details.');
+  const suspendedAccounts = await adminAgent.get('/api/v1/admin/users/all-users').query({ role: 'farmer', status: 'suspended', search: suffix });
+  assert(suspendedAccounts.status === 200 && suspendedAccounts.body.meta.total === 0, 'The administrator account status filter returned an active account as suspended.');
+  const invalidAccountStatus = await adminAgent.get('/api/v1/admin/users/all-users').query({ status: 'unverified' });
+  assert(invalidAccountStatus.status === 422 && invalidAccountStatus.body.code === 'INVALID_USER_STATUS_FILTER', 'Invalid administrator account status filters were not rejected.');
+  const farmerRoleChangeGate = await farmerAgent.patch(`/api/v1/admin/users/${roleTargetId}/role`).set('X-CSRF-Token', farmerCsrf).send({ role: 'farmer' });
+  assert(farmerRoleChangeGate.status === 403, 'A farmer changed another account role.');
+  const selfRoleChangeGate = await adminAgent.patch(`/api/v1/admin/users/${adminId}/role`).set('X-CSRF-Token', adminCsrf).send({ role: 'admin' });
+  assert(selfRoleChangeGate.status === 409, 'An administrator changed their own privileged role.');
+  const roleChange = await adminAgent.patch(`/api/v1/admin/users/${roleTargetId}/role`).set('X-CSRF-Token', adminCsrf).send({ role: 'farmer' });
+  const roleChangedUser: any = await User.findById(roleTargetId).lean();
+  assert(roleChange.status === 200 && roleChangedUser?.role === 'farmer', 'The authorized administrator role update did not persist.');
+  const roleRestore = await adminAgent.patch(`/api/v1/admin/users/${roleTargetId}/role`).set('X-CSRF-Token', adminCsrf).send({ role: 'buyer' });
+  assert(roleRestore.status === 200 && (await User.findById(roleTargetId).lean())?.role === 'buyer', 'The authorized administrator could not restore the account role.');
+  const genericAdminElevation = await adminAgent.patch(`/api/v1/admin/users/${roleTargetId}/role`).set('X-CSRF-Token', adminCsrf).send({ role: 'super_admin' });
+  assert(genericAdminElevation.status === 422 && (await User.findById(roleTargetId).lean())?.role === 'buyer', 'The general user-role operation allowed elevation to an administrator role.');
+  const genericAdminDemotion = await adminAgent.patch(`/api/v1/admin/users/${targetAdminId}/role`).set('X-CSRF-Token', adminCsrf).send({ role: 'buyer' });
+  assert(genericAdminDemotion.status === 409 && (await User.findById(targetAdminId).lean())?.role === 'admin', 'The general user-role operation changed an administrator account.');
+  await adminAgent.patch(`/api/v1/admin/roles/${customRoleId}`).set('X-CSRF-Token', adminCsrf).send({ permissions: ['users.read', 'users.roles.manage'] });
+  const delegatedAdminAgent = request.agent(app);
+  const delegatedAdminCsrf = await csrf(delegatedAdminAgent, 'admin');
+  const delegatedAdminLogin = await delegatedAdminAgent.post('/api/v1/auth/admin/login').set('X-CSRF-Token', delegatedAdminCsrf).send({ email: targetAdmin.email, password });
+  assert(delegatedAdminLogin.status === 200, 'The isolated delegated administrator could not sign in.');
+  const delegatedElevation = await delegatedAdminAgent.patch(`/api/v1/admin/users/${roleTargetId}/role`).set('X-CSRF-Token', delegatedAdminCsrf).send({ role: 'admin' });
+  assert(delegatedElevation.status === 422 && (await User.findById(roleTargetId).lean())?.role === 'buyer', 'A delegated role-management permission allowed administrator elevation.');
+  const farmerVerificationGate = await farmerAgent.get('/api/v1/admin/users/verifications');
+  assert(farmerVerificationGate.status === 403, 'A farmer accessed the administrator verification queue.');
+  const verificationDecision = await adminAgent.patch(`/api/v1/admin/users/${farmerId}/verification`).set('X-CSRF-Token', adminCsrf).send({ status: 'verified', reason: 'Isolated test verification decision.' });
+  const verifiedTestFarmer: any = await User.findById(farmerId).lean();
+  assert(verificationDecision.status === 200 && verifiedTestFarmer?.verificationStatus === 'verified', 'The administrator verification decision did not persist to the user record.');
+  const contactMessage = await farmerAgent.post('/api/v1/contact-message').set('X-CSRF-Token', farmerCsrf).send({ name: `Isolated contact ${suffix}`, email: `contact-${suffix}@example.test`, subject: 'E2E support workflow', message: 'This support request is stored only in the isolated database.', category: 'Farmer assistance', userType: 'Farmer' });
   assert(contactMessage.status === 201, 'A public support request was not persisted.');
   contactMessageId = new mongoose.Types.ObjectId(contactMessage.body.data.id);
-  const adminSupport = await adminAgent.get('/api/v1/admin/support').query({ search: suffix });
-  assert(adminSupport.status === 200 && adminSupport.body.data.some((row: any) => row.id === String(contactMessageId)), 'AgriLink Control could not find the persisted support request.');
+  const adminSupport = await adminAgent.get('/api/v1/admin/support').query({ search: suffix, status: 'open', page: 1, limit: 10 });
+  assert(adminSupport.status === 200 && adminSupport.body.data.some((row: any) => row.id === String(contactMessageId) && row.category === 'Farmer assistance' && row.userType === 'Farmer') && adminSupport.body.meta.total === 1, 'AgriLink Control could not search and filter the persisted support request with its category and account type.');
+  const supportAssignees = await adminAgent.get('/api/v1/admin/support/assignees');
+  assert(supportAssignees.status === 200 && supportAssignees.body.data.assignees.some((row: any) => row.id === String(adminId)), 'The support workflow did not return active administrator assignees.');
+  const invalidSupportAssignee = await adminAgent.patch(`/api/v1/admin/support/${contactMessageId}/assignment`).set('X-CSRF-Token', adminCsrf).send({ assignedTo: String(buyerId) });
+  assert(invalidSupportAssignee.status === 422 && invalidSupportAssignee.body.code === 'INVALID_SUPPORT_ASSIGNEE', 'The support workflow allowed assignment to a non-administrator account.');
+  const farmerSupportAssignment = await farmerAgent.patch(`/api/v1/admin/support/${contactMessageId}/assignment`).set('X-CSRF-Token', farmerCsrf).send({ assignedTo: String(adminId) });
+  assert(farmerSupportAssignment.status === 403, 'A farmer assigned an administrator support case.');
+  const assignSupport = await adminAgent.patch(`/api/v1/admin/support/${contactMessageId}/assignment`).set('X-CSRF-Token', adminCsrf).send({ assignedTo: String(adminId) });
+  const assignedSupportRecord: any = await ContactMessage.findById(contactMessageId).lean();
+  assert(assignSupport.status === 200 && assignSupport.body.data.assignedTo.id === String(adminId) && String(assignedSupportRecord?.assignedTo) === String(adminId), `Support assignment did not persist to the isolated database (status ${assignSupport.status}, returned ${String(assignSupport.body?.data?.assignedTo?.id)}, persisted ${String(assignedSupportRecord?.assignedTo)}).`);
+  const unassignSupport = await adminAgent.patch(`/api/v1/admin/support/${contactMessageId}/assignment`).set('X-CSRF-Token', adminCsrf).send({ assignedTo: null });
+  assert(unassignSupport.status === 200 && unassignSupport.body.data.assignedTo === null && (await ContactMessage.findById(contactMessageId).lean() as any)?.assignedTo === null, 'The administrator could not return a support case to the unassigned queue.');
+  await adminAgent.patch(`/api/v1/admin/support/${contactMessageId}/assignment`).set('X-CSRF-Token', adminCsrf).send({ assignedTo: String(adminId) });
+  const supportDetailsBeforeReply = await adminAgent.get(`/api/v1/admin/support/${contactMessageId}`);
+  assert(supportDetailsBeforeReply.status === 200 && supportDetailsBeforeReply.body.data.message.includes('isolated database') && supportDetailsBeforeReply.body.data.category === 'Farmer assistance' && supportDetailsBeforeReply.body.data.userType === 'Farmer' && supportDetailsBeforeReply.body.data.assignedTo.id === String(adminId), 'Support detail did not return persisted message category, account type and assignee information.');
   const farmerSupportGate = await farmerAgent.get('/api/v1/admin/support');
   assert(farmerSupportGate.status === 403, 'A farmer accessed administrator support records.');
   const supportReply = await adminAgent.post(`/api/v1/admin/support/${contactMessageId}/reply`).set('X-CSRF-Token', adminCsrf).send({ reply: 'The team has recorded this response for follow-up.' });
   const savedContactMessage: any = await ContactMessage.findById(contactMessageId).lean();
   assert(supportReply.status === 200 && supportReply.body.data.deliveryStatus === 'not_configured' && savedContactMessage?.replies?.[0]?.deliveryStatus === 'not_configured' && savedContactMessage?.status === 'response_recorded', 'The support reply was not saved with honest email-delivery status.');
+  const supportDetailsAfterReply = await adminAgent.get(`/api/v1/admin/support/${contactMessageId}`);
+  assert(supportDetailsAfterReply.status === 200 && supportDetailsAfterReply.body.data.replies[0]?.body === 'The team has recorded this response for follow-up.' && supportDetailsAfterReply.body.data.replies[0]?.author.id === String(adminId) && supportDetailsAfterReply.body.data.replies[0]?.deliveryStatus === 'not_configured', 'Support case detail did not resolve persisted reply authorship and delivery status.');
+  const updateSupportStatus = await adminAgent.patch(`/api/v1/admin/support/${contactMessageId}`).set('X-CSRF-Token', adminCsrf).send({ status: 'in_progress', resolutionNote: 'Administrator is reviewing the request.' });
+  const filteredSupport = await adminAgent.get('/api/v1/admin/support').query({ status: 'in_progress', search: suffix });
+  assert(updateSupportStatus.status === 200 && filteredSupport.body.data.some((row: any) => row.id === String(contactMessageId)), 'The support status filter did not reflect the persisted administrator update.');
+  const supportAudit = await adminAgent.get('/api/v1/admin/audit-logs').query({ search: String(contactMessageId), action: 'support.assigned', resource: 'contact-message', actor: admin.email, limit: 10 });
+  assert(supportAudit.status === 200 && supportAudit.body.data.length > 0 && supportAudit.body.data.every((row: any) => row.resourceId === String(contactMessageId) && row.actor.id === String(adminId)), 'Administrator audit filters did not return the actual support assignment events.');
+  const deniedAuditOutcome = await adminAgent.get('/api/v1/admin/audit-logs').query({ outcome: 'denied', limit: 1 });
+  assert(deniedAuditOutcome.status === 200, 'The audit outcome filter rejected the persisted denied outcome category.');
+  const farmerAuditGate = await farmerAgent.get('/api/v1/admin/audit-logs');
+  assert(farmerAuditGate.status === 403, 'A farmer accessed the administrator audit log.');
   const createdReport = await buyerAgent.post('/api/v1/reports').set('X-CSRF-Token', buyerCsrf).send({ type: 'listing', reason: `Isolated report ${suffix} requires review.`, resourceId: String(productId) });
   assert(createdReport.status === 201, 'The buyer report was not persisted.');
   reportId = new mongoose.Types.ObjectId(createdReport.body.data.id);
@@ -268,6 +567,12 @@ try {
   assert(wrongRole.status === 403, 'A buyer reached a farmer-only AI capability.');
   const netProfit = await farmerAgent.post('/api/v1/ai/farmer/net-profit-advisor').set('X-CSRF-Token', farmerCsrf).send({ calculation: { expectedSellingPrice: 100, sellableQuantity: 10, productionCost: 200, harvestCost: 100, packagingCost: 0, transportAndSellingCost: 0, otherCost: 0, targetProfit: 200 } });
   assert(netProfit.status === 200 && netProfit.body.data.data.revenue === 1000 && netProfit.body.data.data.totalCosts === 300 && netProfit.body.data.data.netProfit === 700 && netProfit.body.data.meta.provider === 'deterministic', 'The net-profit capability did not return the transparent calculation from user inputs.');
+  const listingModeration = await adminAgent.patch(`/api/v1/admin/products/${productId}/moderation`).set('X-CSRF-Token', adminCsrf).send({ status: 'suspended', reason: 'Isolated E2E listing moderation check.' });
+  const moderatedListingDetails = await adminAgent.get(`/api/v1/admin/products/${productId}/details`);
+  assert(listingModeration.status === 200 && moderatedListingDetails.status === 200 && moderatedListingDetails.body.data.listing.status === 'suspended' && moderatedListingDetails.body.data.moderation.reason === 'Isolated E2E listing moderation check.' && moderatedListingDetails.body.data.moderation.history[0]?.status === 'suspended', 'Listing moderation state and audit history did not persist into administrator details.');
+  const filteredAdminListings = await adminAgent.get('/api/v1/admin/products').query({ page: 1, limit: 25, search: suffix, status: 'suspended' });
+  const invalidListingFilter = await adminAgent.get('/api/v1/admin/products').query({ status: 'unverified' });
+  assert(filteredAdminListings.status === 200 && filteredAdminListings.body.data.length === 1 && filteredAdminListings.body.meta.total === 1 && invalidListingFilter.status === 422, 'Listing server search/status filters or validation failed.');
   const duplicate = await adminAgent.post('/api/v1/admin/market-data/observations').set('X-CSRF-Token', adminCsrf).send({ ...observation, price: 72 });
   assert(duplicate.status === 409, 'Duplicate market observations were not rejected.');
 
@@ -315,17 +620,126 @@ try {
     assert(providerFailure.status === 502 && providerFailure.body.code === 'MARKET_PROVIDER_UNAVAILABLE', 'An upstream KAMIS error did not produce an honest unavailable response.');
   } finally { globalThis.fetch = fetchBeforeFailure; }
   const adminSummary = await adminAgent.get('/api/v1/admin/dashboard');
-  assert(adminSummary.status === 200 && adminSummary.body.data.users === 3 && adminSummary.body.data.orders >= 1, 'The admin overview did not read persisted test records.');
+  assert(adminSummary.status === 200 && adminSummary.body.data.users === 5 && adminSummary.body.data.orders >= 1, 'The admin overview did not read persisted test records.');
   const today = new Date().toISOString().slice(0, 10);
   const analytics = await adminAgent.get('/api/v1/admin/analytics/summary').query({ from: today, to: today });
   assert(analytics.status === 200 && analytics.body.data.totalOrders === 1, 'Date-filtered admin analytics did not count the persisted test order.');
+
+  const unavailableSignupEmail = `mail-unavailable-${suffix}@example.test`;
+  const failedSignupAgent = request.agent(app);
+  const failedSignupCsrf = await csrf(failedSignupAgent);
+  const failedSignup = await failedSignupAgent.post('/api/v1/users/create').set('X-CSRF-Token', failedSignupCsrf).send({ fullName: 'Unavailable Email Test', email: unavailableSignupEmail, password, role: 'farmer' });
+  assert(failedSignup.status === 503 && failedSignup.body.code === 'EMAIL_PROVIDER_NOT_CONFIGURED' && await Otp.countDocuments({ sentTo: unavailableSignupEmail, purpose: 'signup' }) === 0, 'An email-provider failure left an unusable registration challenge behind.');
+
+  const signupChallengeId = randomBytes(32).toString('base64url');
+  const signupCode = '614209';
+  const pendingSignupEmail = `resend-failure-${suffix}@example.test`;
+  const pendingSignup = await createOtpFixture({ email: pendingSignupEmail, challengeId: signupChallengeId, code: signupCode, passwordHash });
+  const resendAgent = request.agent(app);
+  const resendCsrf = await csrf(resendAgent);
+  const failedResend = await resendAgent.patch('/api/v1/otp/resend-otp').set('X-CSRF-Token', resendCsrf).send({ token: signupChallengeId });
+  const stillPending = await Otp.findById(pendingSignup._id).select('+otpHash +registrationData');
+  assert(failedResend.status === 503 && failedResend.body.code === 'EMAIL_PROVIDER_NOT_CONFIGURED' && stillPending?.otpHash === otpCodeHash(signupChallengeId, signupCode) && stillPending?.attempts === 0, 'A failed OTP resend invalidated the existing delivered verification code.');
+
+  const otpAgent = request.agent(app);
+  const otpCsrf = await csrf(otpAgent);
+  const unknownRecoveryEmail = `recovery-provider-unavailable-${suffix}@example.test`;
+  const recoveryRecordsBefore = await Otp.countDocuments({ sentTo: unknownRecoveryEmail, purpose: 'password-reset' });
+  const unavailableRecoveryRequest = await otpAgent.post('/api/v1/auth/forgot-password-otp').set('X-CSRF-Token', otpCsrf).send({ email: unknownRecoveryEmail });
+  const recoveryRecordsAfter = await Otp.countDocuments({ sentTo: unknownRecoveryEmail, purpose: 'password-reset' });
+  assert(unavailableRecoveryRequest.status === 503 && unavailableRecoveryRequest.body.code === 'EMAIL_PROVIDER_NOT_CONFIGURED' && recoveryRecordsBefore === recoveryRecordsAfter, 'Password recovery did not report an unavailable SMTP provider truthfully without creating a challenge.');
+  const signupVerified = await otpAgent.post('/api/v1/users/create-user-verify-otp').set('X-CSRF-Token', otpCsrf).send({ token: signupChallengeId, otp: signupCode });
+  assert(signupVerified.status === 200 && signupVerified.body.data.user.role === 'seller', 'A valid, unexpired registration code did not create its account and session.');
+  otpCreatedUserId = new mongoose.Types.ObjectId(signupVerified.body.data.user.id);
+  const signupReplay = await otpAgent.post('/api/v1/users/create-user-verify-otp').set('X-CSRF-Token', otpCsrf).send({ token: signupChallengeId, otp: signupCode });
+  assert(signupReplay.status === 400 && signupReplay.body.code === 'OTP_INVALID', 'A registration OTP was accepted more than once.');
+
+  const exhaustedChallengeId = randomBytes(32).toString('base64url');
+  const exhaustedCode = '485173';
+  const exhausted = await createOtpFixture({ email: `attempt-limit-${suffix}@example.test`, challengeId: exhaustedChallengeId, code: exhaustedCode, passwordHash });
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const invalidCode = await otpAgent.post('/api/v1/users/create-user-verify-otp').set('X-CSRF-Token', otpCsrf).send({ token: exhaustedChallengeId, otp: '000000' });
+    assert(invalidCode.status === 400 && invalidCode.body.code === 'OTP_INVALID', 'An incorrect verification code did not fail safely.');
+  }
+  const afterFiveAttempts = await Otp.findById(exhausted._id).select('attempts');
+  const lockedCode = await otpAgent.post('/api/v1/users/create-user-verify-otp').set('X-CSRF-Token', otpCsrf).send({ token: exhaustedChallengeId, otp: exhaustedCode });
+  assert(afterFiveAttempts?.attempts === 5 && lockedCode.status === 400 && lockedCode.body.code === 'OTP_INVALID', 'The OTP challenge remained usable after its per-challenge attempt limit.');
+
+  const expiredChallengeId = randomBytes(32).toString('base64url');
+  await createOtpFixture({ email: `expired-otp-${suffix}@example.test`, challengeId: expiredChallengeId, code: '307551', passwordHash, expiresAt: new Date(Date.now() - 1000) });
+  const expiredCode = await otpAgent.post('/api/v1/users/create-user-verify-otp').set('X-CSRF-Token', otpCsrf).send({ token: expiredChallengeId, otp: '307551' });
+  assert(expiredCode.status === 400 && expiredCode.body.code === 'OTP_INVALID', 'An expired registration OTP was accepted.');
+
+  const resetChallengeId = randomBytes(32).toString('base64url');
+  const resetCode = '925741';
+  const resetFixture = await createOtpFixture({ email: farmer.email, challengeId: resetChallengeId, code: resetCode, passwordHash, user: farmerId });
+  const recoveryResendUnavailable = await otpAgent.patch('/api/v1/auth/forgot-password-otp-resend').set('X-CSRF-Token', otpCsrf).send({ token: resetChallengeId });
+  const recoveryChallengeUnchanged = await Otp.findById(resetFixture._id).select('+otpHash attempts');
+  assert(recoveryResendUnavailable.status === 503 && recoveryResendUnavailable.body.code === 'EMAIL_PROVIDER_NOT_CONFIGURED' && recoveryChallengeUnchanged?.otpHash === otpCodeHash(resetChallengeId, resetCode) && recoveryChallengeUnchanged?.attempts === 0, 'An unavailable recovery resend changed or consumed the pending OTP challenge.');
+
+  const failedResetChallengeId = randomBytes(32).toString('base64url');
+  const failedReset = await createOtpFixture({ email: farmer.email, challengeId: failedResetChallengeId, code: '783416', passwordHash, user: farmerId });
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const invalidResetCode = await otpAgent.patch('/api/v1/auth/forgot-password-otp-match').set('X-CSRF-Token', otpCsrf).send({ token: failedResetChallengeId, otp: '000000' });
+    assert(invalidResetCode.status === 400 && invalidResetCode.body.code === 'OTP_INVALID', 'An incorrect password-recovery code did not fail safely.');
+  }
+  const resetAttempts = await Otp.findById(failedReset._id).select('attempts');
+  const lockedResetCode = await otpAgent.patch('/api/v1/auth/forgot-password-otp-match').set('X-CSRF-Token', otpCsrf).send({ token: failedResetChallengeId, otp: '783416' });
+  assert(resetAttempts?.attempts === 5 && lockedResetCode.status === 400 && lockedResetCode.body.code === 'OTP_INVALID', 'A password-recovery code remained usable after its attempt limit.');
+
+  const expiredResetChallengeId = randomBytes(32).toString('base64url');
+  await createOtpFixture({ email: farmer.email, challengeId: expiredResetChallengeId, code: '150382', passwordHash, user: farmerId, expiresAt: new Date(Date.now() - 1000) });
+  const expiredResetCode = await otpAgent.patch('/api/v1/auth/forgot-password-otp-match').set('X-CSRF-Token', otpCsrf).send({ token: expiredResetChallengeId, otp: '150382' });
+  assert(expiredResetCode.status === 400 && expiredResetCode.body.code === 'OTP_INVALID', 'An expired password-recovery code was accepted.');
+
+  const resetMatch = await otpAgent.patch('/api/v1/auth/forgot-password-otp-match').set('X-CSRF-Token', otpCsrf).send({ token: resetChallengeId, otp: resetCode });
+  assert(resetMatch.status === 200 && typeof resetMatch.body.data.resetToken === 'string', 'A valid password-reset OTP did not create a one-use reset token.');
+  const newPassword = 'AgriLink isolated reset password 9!';
+  const passwordReset = await otpAgent.patch('/api/v1/auth/forgot-password-reset').set('X-CSRF-Token', otpCsrf).send({ token: resetMatch.body.data.resetToken, newPassword, confirmPassword: newPassword });
+  const resetReplay = await otpAgent.patch('/api/v1/auth/forgot-password-reset').set('X-CSRF-Token', otpCsrf).send({ token: resetMatch.body.data.resetToken, newPassword, confirmPassword: newPassword });
+  const resetRecord = await Otp.findById(resetFixture._id).select('status');
+  const revokedFarmerSession = await farmerAgent.get('/api/v1/auth/me');
+  assert(passwordReset.status === 200 && resetRecord?.status === 'used' && resetReplay.status === 400 && resetReplay.body.code === 'RESET_TOKEN_INVALID' && revokedFarmerSession.status === 401, 'Password recovery was not single-use or failed to revoke existing sessions.');
+
+  const postResetFarmerAgent = request.agent(app);
+  const postResetFarmerCsrf = await csrf(postResetFarmerAgent);
+  const postResetFarmerLogin = await postResetFarmerAgent.post('/api/v1/auth/login').set('X-CSRF-Token', postResetFarmerCsrf).send({ email: farmer.email, password: newPassword, role: 'farmer' });
+  const postResetFarmerCookie = cookiePair(postResetFarmerLogin, getConfig().USER_COOKIE_NAME);
+  assert(postResetFarmerLogin.status === 200 && postResetFarmerCookie, 'A Farmer could not create a new marketplace session after password recovery.');
+  const farmerLogoutCookieHeader = `${postResetFarmerCookie}; ${adminSessionCookie}; agrilink.csrf=${encodeURIComponent(postResetFarmerCsrf)}; agrilink.admin.csrf=${encodeURIComponent(adminCsrf)}`;
+  const farmerLogout = await request(app).post('/api/v1/auth/logout').set('Cookie', farmerLogoutCookieHeader).set('X-CSRF-Token', postResetFarmerCsrf).send({});
+  const adminAfterFarmerLogout = await request(app).get('/api/v1/auth/admin/session').set('Cookie', adminSessionCookie);
+  const farmerAfterLogout = await request(app).get('/api/v1/auth/me').set('Cookie', postResetFarmerCookie);
+  assert(farmerLogout.status === 200 && farmerLogout.body.data.serverInvalidated === true && farmerAfterLogout.status === 401 && adminAfterFarmerLogout.status === 200, `Farmer logout did not revoke only its own session while preserving the concurrent administrator session (logout=${farmerLogout.status}/${String(farmerLogout.body?.data?.serverInvalidated)}, farmer=${farmerAfterLogout.status}, admin=${adminAfterFarmerLogout.status}).`);
+
+  const farmerSessionAfterLogout = await postResetFarmerAgent.post('/api/v1/auth/login').set('X-CSRF-Token', postResetFarmerCsrf).send({ email: farmer.email, password: newPassword, role: 'farmer' });
+  const independentFarmerCookie = cookiePair(farmerSessionAfterLogout, getConfig().USER_COOKIE_NAME);
+  assert(farmerSessionAfterLogout.status === 200 && independentFarmerCookie, 'The Farmer could not establish an independent session before administrator logout verification.');
+  const adminLogoutCookieHeader = `${independentFarmerCookie}; ${adminSessionCookie}; agrilink.csrf=${encodeURIComponent(postResetFarmerCsrf)}; agrilink.admin.csrf=${encodeURIComponent(adminCsrf)}`;
+  const adminLogout = await request(app).post('/api/v1/auth/admin/logout').set('Cookie', adminLogoutCookieHeader).set('X-CSRF-Token', adminCsrf).send({});
+  const farmerAfterAdminLogout = await request(app).get('/api/v1/auth/me').set('Cookie', independentFarmerCookie);
+  const adminAfterAdminLogout = await request(app).get('/api/v1/auth/admin/session').set('Cookie', adminSessionCookie);
+  assert(adminLogout.status === 200 && adminLogout.body.data.serverInvalidated === true && farmerAfterAdminLogout.status === 200 && adminAfterAdminLogout.status === 401, 'Administrator logout did not revoke only its own session while preserving the concurrent marketplace session.');
 
   await disconnectDatabase();
   await connectDatabase(uri);
   const afterReconnect = await Order.findById(orderId).lean();
   assert(afterReconnect?.totalCents === 37500, 'Order data did not survive a backend-style MongoDB reconnect.');
-  console.log(JSON.stringify({ result: 'passed', isolatedDatabase: databaseName, workflows: ['farmer login and listing persistence', 'marketplace discovery', 'buyer-farmer inquiry creation, listing context, persisted reply, role-protected status and read notification', 'account-scoped notification preference persistence and enforcement', 'buyer listing-linked purchase request and history', 'buyer login and cart persistence', 'transactional checkout, stock reservation and buyer/farmer notifications', 'idempotent checkout replay', 'farmer and buyer order views', 'delivered-order review eligibility, verified review creation, duplicate prevention, ownership, editing and live aggregate', 'provider-unavailable payment safety', 'all twelve AI capabilities with explicit provider-unavailable state and deterministic net-profit calculation', 'AI role authorization', 'admin matching-weight update and authenticated retrieval by the live scoring client', 'admin login and live dashboard metrics', 'date-filtered analytics', 'administrator support search, reply persistence and honest email-unavailable state', 'report listing and administrator status update', 'payout request listing with farmer and currency provenance', 'support and payout administrator authorization', 'market-source registration', 'KAMIS sync, quote-type preservation, public visibility and idempotent replay', 'KAMIS upstream failure handling', 'pending/verified/corrected market-observation lifecycle', 'duplicate observation rejection', 'ownership and role authorization', 'MongoDB reconnect persistence'], applicationDatabaseTouched: false }));
+  console.log(JSON.stringify({ result: 'passed', isolatedDatabase: databaseName, workflows: ['farmer login, self-profile retrieval/edit/archive/restore and listing persistence', 'marketplace discovery', 'admin account search, details, role/status filters, pagination, farmer/buyer role changes, permitted profile edits and protected administrator records', 'admin category create/list/search/rename/slug validation and public visibility', 'admin listing details, seller ownership, moderation reason/history, server status/search filters and permission denial', 'admin verification queue, permission denial and persisted decision', 'custom administrator role creation, permission update and assignment', 'administrator-specific status changes, generic user-route denial, role denial and audit persistence', 'admin settings validation, security/notification diagnostics and registration/marketplace feature flags with retired maintenance configuration rejected', 'announcement draft, edit, permission denial and persisted publication', 'FAQ creation, public delivery, update, deactivation and permission denial', 'buyer-farmer inquiry creation, listing context, persisted reply, role-protected status and read notification', 'account-scoped notification preference persistence and enforcement', 'administrator in-app notification delivery and recipient permissions', 'buyer listing-linked purchase request and history', 'buyer login and cart persistence', 'transactional checkout, stock reservation and buyer/farmer notifications', 'idempotent checkout replay', 'farmer and buyer order views', 'delivered-order review eligibility, verified review creation, duplicate prevention, ownership, editing and live aggregate', 'provider-unavailable payment safety', 'all twelve AI capabilities with explicit provider-unavailable state and deterministic net-profit calculation', 'AI role authorization', 'admin matching-weight update and authenticated retrieval by the live scoring client', 'admin email-or-username login, HttpOnly cookie, session restore, expiry, logout and live dashboard metrics', 'date-filtered analytics', 'filtered and paginated administrator order/payment ledger with type, status, date, search and permission checks', 'administrator support search/status filters, active admin assignment/unassignment, detailed replies, authorized status updates and honest email-unavailable state', 'administrator audit search/outcome/date filters and permission denial', 'report listing and administrator status update', 'payout request listing with farmer and currency provenance', 'support and payout administrator authorization', 'market-source registration', 'KAMIS sync, quote-type preservation, public visibility and idempotent replay', 'KAMIS upstream failure handling', 'pending/verified/corrected market-observation lifecycle', 'duplicate observation rejection', 'ownership and role authorization', 'MongoDB reconnect persistence'], applicationDatabaseTouched: false }));
 } finally {
+  if (testUploadFilename && /^[a-f0-9-]{36}\.png$/.test(testUploadFilename)) {
+    await unlink(path.join(path.resolve(getConfig().uploadDirectory), testUploadFilename)).catch(() => undefined);
+  }
+  if (otpFixtureIds.length) await Otp.deleteMany({ _id: { $in: otpFixtureIds } }).catch(() => undefined);
+  if (testPlatformSettings.length) {
+    for (const current of testPlatformSettings) {
+      const previous = previousPlatformSettings?.find((saved) => saved.key === current.key);
+      if (previous) await Setting.replaceOne({ _id: current._id }, previous).catch(() => undefined);
+      else await Setting.deleteOne({ _id: current._id }).catch(() => undefined);
+    }
+    if (adminId && platformSettingsTestStartedAt) await AuditLog.deleteMany({ actor: adminId, action: 'platform.settings_updated', createdAt: { $gte: platformSettingsTestStartedAt } }).catch(() => undefined);
+    invalidatePlatformSettingsCache();
+  }
   if (testMatchingSettingId) {
     if (previousMatchingSetting) await Setting.replaceOne({ _id: testMatchingSettingId }, previousMatchingSetting).catch(() => undefined);
     else await Setting.deleteOne({ _id: testMatchingSettingId }).catch(() => undefined);
@@ -334,8 +748,9 @@ try {
     if (previousAiProviderSetting) await Setting.replaceOne({ _id: testAiProviderSettingId }, previousAiProviderSetting).catch(() => undefined);
     else await Setting.deleteOne({ _id: testAiProviderSettingId }).catch(() => undefined);
   }
-  if (farmerId || buyerId || adminId || productId || categoryId || marketSourceId || kamisSourceId || contactMessageId || reportId || withdrawalId || conversationId || reviewId) {
+  if (farmerId || buyerId || adminId || targetAdminId || productId || testPaymentId || categoryId || adminCreatedCategoryId || announcementId || faqId || marketSourceId || kamisSourceId || contactMessageId || reportId || withdrawalId || conversationId || reviewId) {
     if (productId) await Product.deleteOne({ _id: productId }).catch(() => undefined);
+    if (testPaymentId) await Payment.deleteOne({ _id: testPaymentId }).catch(() => undefined);
     if (contactMessageId) await ContactMessage.deleteOne({ _id: contactMessageId }).catch(() => undefined);
     if (reportId) await Report.deleteOne({ _id: reportId }).catch(() => undefined);
     if (withdrawalId) await Withdraw.deleteOne({ _id: withdrawalId }).catch(() => undefined);
@@ -348,6 +763,9 @@ try {
       ]).catch(() => undefined);
     }
     if (categoryId) await Category.deleteOne({ _id: categoryId }).catch(() => undefined);
+    if (adminCreatedCategoryId) await Category.deleteOne({ _id: adminCreatedCategoryId }).catch(() => undefined);
+    if (announcementId) await Announcement.deleteOne({ _id: announcementId }).catch(() => undefined);
+    if (faqId) await FAQ.deleteOne({ _id: faqId }).catch(() => undefined);
     if (marketSourceId) await MarketDataSource.deleteOne({ _id: marketSourceId }).catch(() => undefined);
     if (kamisSourceId) {
       await Promise.all([
@@ -356,11 +774,12 @@ try {
         MarketDataSource.deleteOne({ _id: kamisSourceId }),
       ]).catch(() => undefined);
     }
-    const userIds = [farmerId, buyerId, adminId].filter(Boolean);
+    const userIds = [farmerId, buyerId, adminId, roleTargetId, targetAdminId, otpCreatedUserId].filter(Boolean);
+    if (targetAdminId) await AdminRole.deleteMany({ name: `Isolated verifier ${suffix}` }).catch(() => undefined);
     if (userIds.length) {
       const conversations = await AiConversation.find({ user: { $in: userIds } }).distinct('_id').catch(() => []);
       await Promise.all([
-        CartItem.deleteMany({ customerId: { $in: userIds } }), PurchaseRequest.deleteMany({ buyer: { $in: userIds } }), Order.deleteMany({ $or: [{ buyer: { $in: userIds } }, { farmer: { $in: userIds } }] }),
+        CartItem.deleteMany({ customerId: { $in: userIds } }), FarmerProfile.deleteMany({ user: { $in: userIds } }), PurchaseRequest.deleteMany({ buyer: { $in: userIds } }), Order.deleteMany({ $or: [{ buyer: { $in: userIds } }, { farmer: { $in: userIds } }] }),
         Notification.deleteMany({ $or: [{ user: { $in: userIds } }, { userId: { $in: userIds } }] }), NotificationLog.deleteMany({ userId: { $in: userIds } }),
         IdempotencyKey.deleteMany({ userId: { $in: userIds } }), RefreshToken.deleteMany({ user: { $in: userIds } }),
         AuditLog.deleteMany({ actor: { $in: userIds } }), MarketPrice.deleteMany({ submittedBy: { $in: userIds } }), User.deleteMany({ _id: { $in: userIds } }),

@@ -4,7 +4,7 @@
  * Step 2 pays each order with M-Pesa or PayPal. The basket is only
  * cleared after the server confirms the orders were created.
  */
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, ShoppingBag, Minus, Plus, Trash2, AlertCircle, Loader2, MapPin, Sprout } from 'lucide-react'
 import { kes } from '../../../utils/format'
 import { createOrder } from '../../orders/services/orderService'
@@ -35,6 +35,7 @@ export default function Checkout({ cart = [], user, onQty, onRemove, onBack, onA
   const [orderError, setOrderError] = useState('')
   const [orders, setOrders] = useState([])
   const [paidIds, setPaidIds] = useState([])
+  const submitInFlight = useRef(false)
 
   if (!user) {
     return (
@@ -68,6 +69,7 @@ export default function Checkout({ cart = [], user, onQty, onRemove, onBack, onA
 
   const placeOrder = async (e) => {
     e.preventDefault()
+    if (submitInFlight.current) return
     if (!cart.length) return
     if (!cartTotalAvailable) {
       setStatus('error')
@@ -77,6 +79,7 @@ export default function Checkout({ cart = [], user, onQty, onRemove, onBack, onA
     const found = validate()
     setErrors(found)
     if (Object.keys(found).length) return
+    submitInFlight.current = true
     setStatus('submitting')
     setOrderError('')
     try {
@@ -103,6 +106,8 @@ export default function Checkout({ cart = [], user, onQty, onRemove, onBack, onA
         setErrors({ [map[err.field]]: err.error })
       }
       setOrderError(err?.error || err?.message || 'Could not place your order.')
+    } finally {
+      submitInFlight.current = false
     }
   }
 

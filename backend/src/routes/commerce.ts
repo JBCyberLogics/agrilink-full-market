@@ -1,16 +1,17 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import { Types } from 'mongoose';
 import { z } from 'zod';
 import { requireAuth, requirePermission } from '../common/auth.js';
 import { writeAudit } from '../common/audit.js';
 import { requireRole, normalizeRole, displayUser } from '../common/identity.js';
-import { HttpError, sendData, sendList } from '../common/http.js';
+import { HttpError, logCheckoutDiagnostic, sendData, sendList } from '../common/http.js';
 import { objectId, pagination, parseBody } from '../common/validation.js';
 import { CartItem, IdempotencyKey, Order, Product, Report, User } from '../database/models.js';
 import { cartRowToApi, ownerIdOf, priceCentsOf, productIsAvailable, stockOf, stockFieldOf } from '../services/marketplace.js';
 import { productToApi } from '../services/marketplace.js';
 import { createInAppNotification } from '../services/notifications.js';
+import { requirePlatformFeature } from '../services/platform-settings.js';
 
 export const cartRouter = Router();
 export const checkoutRouter = Router();
@@ -24,6 +25,7 @@ cartRouter.get('/', requireAuth, async (req, res) => {
   return sendData(res, { items: await Promise.all(rows.map(cartRowToApi)) });
 });
 async function addToCart(req: any, res: any) {
+  await requirePlatformFeature('marketplaceEnabled');
   requireRole(req, ['buyer']);
   const body = parseBody(z.object({ productId: z.string().min(1), quantity: z.coerce.number().int().positive().max(100000) }), req.body);
   const productId = objectId(body.productId, 'productId');
@@ -171,37 +173,136 @@ export async function orderToApi(input: any) {
   };
 }
 
+/** Serialize the actual order document created in the committed transaction,
+ * without secondary User/Product reads. This is only used if post-commit reads
+ * fail, so a persisted checkout is not turned into a misleading generic 500. */
+function orderSnapshotToApi(input: any) {
+  const order = typeof input?.toObject === 'function' ? input.toObject() : input;
+  const rawItems = Array.isArray(order.items) ? order.items : Array.isArray(order.productList) ? order.productList : [];
+  const items = rawItems.map((item: any) => {
+    const productId = item.product ?? item.productId ?? item._id;
+    const cents = Number.isFinite(Number(item.unitPriceCents)) && Number(item.unitPriceCents) > 0
+      ? Number(item.unitPriceCents)
+      : Number.isFinite(Number(item.price)) && Number(item.price) > 0 ? Math.round(Number(item.price) * 100) : null;
+    const quantity = Number.isFinite(Number(item.quantity)) && Number(item.quantity) > 0 ? Number(item.quantity) : null;
+    const subtotalCents = Number.isFinite(Number(item.subtotalCents))
+      ? Number(item.subtotalCents)
+      : cents !== null && quantity !== null ? cents * quantity : null;
+    return {
+      product: productId ? { _id: String(productId), name: item.name ?? null, measurementUnit: item.unit ?? null } : null,
+      productId: productId ? String(productId) : '',
+      name: item.name ?? null,
+      quantity,
+      unit: item.unit ?? null,
+      unitPriceCents: cents,
+      price: cents === null ? null : cents / 100,
+      subtotalCents,
+    };
+  });
+  const buyerId = order.buyer ?? order.customerId;
+  const farmerId = order.farmer ?? order.sellerId;
+  const subtotalCents = Number.isFinite(Number(order.subtotalCents)) ? Number(order.subtotalCents) : null;
+  const deliveryFeeCents = Number.isFinite(Number(order.deliveryFeeCents)) ? Number(order.deliveryFeeCents) : null;
+  const totalCents = Number.isFinite(Number(order.totalCents)) ? Number(order.totalCents)
+    : subtotalCents !== null && deliveryFeeCents !== null ? subtotalCents + deliveryFeeCents : null;
+  return {
+    _id: String(order._id), id: String(order._id),
+    orderNumber: order.orderNumber ?? String(order._id),
+    buyer: buyerId ? String(buyerId) : null,
+    farmer: farmerId ? String(farmerId) : null,
+    customerId: buyerId ? String(buyerId) : null,
+    sellerId: farmerId ? String(farmerId) : null,
+    items, orderItems: items,
+    subtotalCents, deliveryFeeCents, totalCents,
+    totalAmount: totalCents === null ? null : totalCents / 100,
+    currency: order.currency ?? null,
+    deliveryAddress: normalizeLegacyAddress(order),
+    deliveryStage: order.status ?? order.deliveryStage ?? null,
+    status: order.status ?? order.deliveryStage ?? null,
+    paymentStatus: order.paymentStatus ?? null,
+    createdAt: order.createdAt ?? order.orderDate ?? null,
+    statusHistory: Array.isArray(order.statusHistory) ? order.statusHistory : [],
+  };
+}
+
+checkoutRouter.use((_req, res, next) => {
+  res.locals.checkoutDiagnostics = {
+    stage: 'authentication',
+    transactionOutcome: 'not_started',
+    idempotencyOutcome: 'not_checked',
+  };
+  next();
+});
+
+function checkoutStage(res: Response, stage: string) {
+  if (res.locals.checkoutDiagnostics) res.locals.checkoutDiagnostics.stage = stage;
+}
+
 checkoutRouter.post('/', requireAuth, async (req, res) => {
+  checkoutStage(res, 'platform_feature_check');
+  await requirePlatformFeature('marketplaceEnabled');
+  checkoutStage(res, 'buyer_authorization');
   requireRole(req, ['buyer']);
+  checkoutStage(res, 'request_validation');
   const address = parseBody(addressSchema, req.body?.address ?? req.body);
   const clientKey = String(req.get('idempotency-key') ?? '').trim();
   if (clientKey.length < 16 || clientKey.length > 128) throw new HttpError(400, 'Checkout requires an Idempotency-Key header.', 'IDEMPOTENCY_KEY_REQUIRED');
   const key = orderKey(req.user._id, clientKey);
   const idempotencyId = idempotencyObjectId(key);
   const bodyHash = addressHash(address);
+  checkoutStage(res, 'idempotency_lookup');
+  res.locals.checkoutDiagnostics.idempotencyOutcome = 'lookup_started';
   const prior = await IdempotencyKey.findOne({ _id: idempotencyId, userId: req.user._id });
   if (prior) {
+    res.locals.checkoutDiagnostics.idempotencyOutcome = 'existing_record_replay';
+    res.locals.checkoutDiagnostics.transactionOutcome = 'previously_committed';
     if (prior.bodyHash !== bodyHash) throw new HttpError(409, 'This checkout key was already used with different delivery details.', 'IDEMPOTENCY_CONFLICT');
     const ids = prior.response?.orderIds ?? [];
-    const rows = await Order.find({ _id: { $in: ids } });
-    return sendData(res, { orders: await Promise.all(rows.map(orderToApi)), idempotentReplay: true });
+    try {
+      checkoutStage(res, 'idempotent_order_read');
+      const rows = await Order.find({ _id: { $in: ids } });
+      checkoutStage(res, 'idempotent_response_serialization');
+      const apiOrders = await Promise.all(rows.map(orderToApi));
+      checkoutStage(res, 'response_sent');
+      logCheckoutDiagnostic(res, 'checkout_replayed');
+      return sendData(res, { orders: apiOrders, idempotentReplay: true });
+    } catch (error) {
+      logCheckoutDiagnostic(res, 'checkout_committed_response_unavailable', error);
+      throw new HttpError(503, 'This checkout was already committed, but its order details are temporarily unavailable. Check your orders before trying again.', 'CHECKOUT_COMMITTED_RESULT_UNAVAILABLE');
+    }
   }
 
+  checkoutStage(res, 'transaction_session_start');
   const session = await (await import('mongoose')).default.startSession();
   let orderIds: string[] = [];
   let createdFresh = false;
+  let committedOrderSnapshots: any[] = [];
+  let responseDetailsDegraded = false;
   try {
+    res.locals.checkoutDiagnostics.transactionOutcome = 'in_progress';
+    res.locals.checkoutDiagnostics.idempotencyOutcome = 'new_key';
+    checkoutStage(res, 'transaction_cart_read');
     await session.withTransaction(async () => {
+      orderIds = [];
+      createdFresh = false;
+      committedOrderSnapshots = [];
+      checkoutStage(res, 'transaction_idempotency_check');
       const repeated = await IdempotencyKey.findOne({ _id: idempotencyId, userId: req.user._id }).session(session);
       if (repeated) {
         if (repeated.bodyHash !== bodyHash) throw new HttpError(409, 'This checkout key was already used with different delivery details.', 'IDEMPOTENCY_CONFLICT');
         orderIds = repeated.response?.orderIds ?? [];
+        res.locals.checkoutDiagnostics.idempotencyOutcome = 'concurrent_replay';
         return;
       }
+      checkoutStage(res, 'transaction_cart_read');
       const cartRows = await CartItem.find(cartOwnerFilter(req.user._id)).session(session);
       if (!cartRows.length) throw new HttpError(409, 'Your cart is empty.', 'CART_EMPTY');
       const grouped = new Map<string, any>();
       for (const cart of cartRows) {
+        checkoutStage(res, 'listing_validation');
+        if (!Types.ObjectId.isValid(String(cart.productId ?? ''))) {
+          throw new HttpError(409, 'A listing in your cart is no longer available.', 'PRODUCT_UNAVAILABLE');
+        }
         const product = await Product.findById(cart.productId).session(session);
         if (!product || !productIsAvailable(product)) throw new HttpError(409, 'A listing in your cart is no longer available.', 'PRODUCT_UNAVAILABLE');
         const quantity = Number(cart.quantity);
@@ -213,6 +314,7 @@ checkoutRouter.post('/', requireAuth, async (req, res) => {
         if (!farmerId || !Types.ObjectId.isValid(String(farmerId))) throw new HttpError(409, 'A listing has no valid farmer record.', 'PRODUCT_OWNER_UNAVAILABLE');
         const price = priceCentsOf(product);
         if (!stockField) throw new HttpError(409, 'A listing does not have verifiable stock.', 'PRODUCT_STOCK_UNAVAILABLE');
+        checkoutStage(res, 'inventory_reservation');
         const set: Record<string, unknown> = { [stockField]: stock - quantity, updatedAt: new Date() };
         const stockFilter: Record<string, unknown> = { _id: product._id, [stockField]: product[stockField] };
         const changed = await Product.updateOne(stockFilter, { $set: set }, { session });
@@ -239,34 +341,114 @@ checkoutRouter.post('/', requireAuth, async (req, res) => {
         statusHistory: [{ status: 'pending', at: new Date(), by: req.user._id }],
         createdAt: new Date(), updatedAt: new Date(),
       }));
+      checkoutStage(res, 'order_persistence');
       const created = await Order.create(docs, { session });
       orderIds = created.map((order: any) => String(order._id));
       createdFresh = true;
+      committedOrderSnapshots = created.map((order: any) => order.toObject());
+      checkoutStage(res, 'cart_clear');
       await CartItem.deleteMany(cartOwnerFilter(req.user._id), { session });
+      checkoutStage(res, 'idempotency_persistence');
       await IdempotencyKey.create([{
         _id: idempotencyId, key, userId: req.user._id, bodyHash, response: { orderIds },
         createdAt: new Date(), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
       }], { session });
+      res.locals.checkoutDiagnostics.idempotencyOutcome = 'record_staged';
     });
+    res.locals.checkoutDiagnostics.transactionOutcome = 'committed';
+    if (res.locals.checkoutDiagnostics.idempotencyOutcome === 'record_staged') {
+      res.locals.checkoutDiagnostics.idempotencyOutcome = 'record_committed';
+    }
   } catch (error: any) {
+    const unknownCommit = typeof error?.hasErrorLabel === 'function'
+      ? error.hasErrorLabel('UnknownTransactionCommitResult')
+      : Array.isArray(error?.errorLabels) && error.errorLabels.includes('UnknownTransactionCommitResult');
+    res.locals.checkoutDiagnostics.transactionOutcome = unknownCommit ? 'unknown_commit_result' : 'aborted';
+    if (res.locals.checkoutDiagnostics.idempotencyOutcome === 'record_staged') {
+      res.locals.checkoutDiagnostics.idempotencyOutcome = unknownCommit ? 'commit_unknown' : 'rolled_back';
+    }
     if (error?.code === 11000) {
+      checkoutStage(res, 'duplicate_key_resolution');
       const repeated = await IdempotencyKey.findOne({ _id: idempotencyId, userId: req.user._id });
-      if (repeated?.bodyHash === bodyHash) { orderIds = repeated.response?.orderIds ?? []; createdFresh = false; }
+      if (repeated?.bodyHash === bodyHash) {
+        orderIds = repeated.response?.orderIds ?? [];
+        createdFresh = false;
+        committedOrderSnapshots = [];
+        res.locals.checkoutDiagnostics.transactionOutcome = 'duplicate_request_not_committed';
+        res.locals.checkoutDiagnostics.idempotencyOutcome = 'replayed_after_duplicate';
+      }
       else throw new HttpError(409, 'This checkout key conflicts with an earlier request.', 'IDEMPOTENCY_CONFLICT');
     } else throw error;
   } finally {
-    await session.endSession();
+    try {
+      await session.endSession();
+    } catch (error) {
+      const diagnostics = res.locals.checkoutDiagnostics;
+      const previousStage = diagnostics.stage;
+      diagnostics.stage = 'transaction_session_cleanup';
+      logCheckoutDiagnostic(res, 'checkout_session_cleanup_failed', error);
+      diagnostics.stage = previousStage;
+    }
   }
-  const rows = await Order.find({ _id: { $in: orderIds } });
-  if (createdFresh) for (const order of rows as any[]) {
-    const orderNumber = String(order.orderNumber ?? order._id);
-    await Promise.all([
-      createInAppNotification(order.buyer ?? order.customerId, 'order', 'Order placed', `Your order ${orderNumber} was created.`, { orderId: String(order._id), status: order.status }),
-      createInAppNotification(order.farmer ?? order.sellerId, 'order', 'New order', `Order ${orderNumber} has been placed.`, { orderId: String(order._id), status: order.status }),
-    ]);
+
+  let rows: any[];
+  try {
+    checkoutStage(res, 'post_commit_order_read');
+    rows = await Order.find({ _id: { $in: orderIds } });
+    if (!rows.length && committedOrderSnapshots.length) {
+      rows = committedOrderSnapshots;
+      responseDetailsDegraded = true;
+    }
+    if (!rows.length && orderIds.length) throw new Error('Committed checkout order records were not returned.');
+  } catch (error) {
+    logCheckoutDiagnostic(res, 'checkout_committed_order_read_failed', error);
+    if (createdFresh && committedOrderSnapshots.length) {
+      rows = committedOrderSnapshots;
+      responseDetailsDegraded = true;
+    }
+    else throw new HttpError(503, 'Your checkout was already committed, but its order details are temporarily unavailable. Check your orders before trying again.', 'CHECKOUT_COMMITTED_RESULT_UNAVAILABLE');
   }
-  await writeAudit({ actor: req.user._id, action: 'checkout.completed', resource: 'order', metadata: { orderCount: rows.length } });
-  return sendData(res, { orders: await Promise.all(rows.map(orderToApi)), idempotentReplay: !createdFresh }, createdFresh ? 201 : 200, createdFresh ? 'Order created.' : 'Existing order returned.');
+
+  if (createdFresh) {
+    checkoutStage(res, 'post_commit_notifications');
+    const notificationResults = await Promise.allSettled(rows.flatMap((order: any) => {
+      const orderNumber = String(order.orderNumber ?? order._id);
+      return [
+        createInAppNotification(order.buyer ?? order.customerId, 'order', 'Order placed', `Your order ${orderNumber} was created.`, { orderId: String(order._id), status: order.status }),
+        createInAppNotification(order.farmer ?? order.sellerId, 'order', 'New order', `Order ${orderNumber} has been placed.`, { orderId: String(order._id), status: order.status }),
+      ];
+    }));
+    for (const result of notificationResults) {
+      if (result.status === 'rejected') logCheckoutDiagnostic(res, 'checkout_post_commit_notification_failed', result.reason);
+    }
+  }
+
+  checkoutStage(res, 'post_commit_audit');
+  try {
+    await writeAudit({ actor: req.user._id, action: 'checkout.completed', resource: 'order', metadata: { orderCount: rows.length } });
+  } catch (error) {
+    logCheckoutDiagnostic(res, 'checkout_post_commit_audit_failed', error);
+  }
+
+  checkoutStage(res, 'response_serialization');
+  try {
+    const apiOrders = await Promise.all(rows.map(orderToApi));
+    checkoutStage(res, 'response_sent');
+    logCheckoutDiagnostic(res, createdFresh ? 'checkout_completed' : 'checkout_replayed');
+    return sendData(res, {
+      orders: apiOrders,
+      idempotentReplay: !createdFresh,
+      ...(responseDetailsDegraded ? { responseDetailsDegraded: true } : {}),
+    }, createdFresh ? 201 : 200, createdFresh ? 'Order created.' : 'Existing order returned.');
+  } catch (error) {
+    logCheckoutDiagnostic(res, 'checkout_post_commit_serialization_failed', error);
+    if (createdFresh && committedOrderSnapshots.length) {
+      checkoutStage(res, 'response_sent_from_committed_snapshot');
+      logCheckoutDiagnostic(res, 'checkout_completed_degraded');
+      return sendData(res, { orders: committedOrderSnapshots.map(orderSnapshotToApi), idempotentReplay: false, responseDetailsDegraded: true }, 201, 'Order created. Some details could not be refreshed.');
+    }
+    throw new HttpError(503, 'Your checkout was already committed, but its order details are temporarily unavailable. Check your orders before trying again.', 'CHECKOUT_COMMITTED_RESULT_UNAVAILABLE');
+  }
 });
 
 orderRouter.post('/create-order', requireAuth, async (_req, _res, next) => {

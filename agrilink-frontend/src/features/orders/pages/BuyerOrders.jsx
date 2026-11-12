@@ -109,15 +109,11 @@ export default function Orders() {
                 <div className="flex flex-col sm:flex-row items-end sm:items-start gap-2">
                   <p className="text-sm font-semibold text-farmer-ink tabular-nums">{kes(o.totalAmount)}</p>
                   <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold">
-                    {o.status === 'Pending'
-                      ? 'Pending · unpaid'
-                      : o.status === 'Confirmed'
-                        ? 'Confirmed'
-                        : 'Cancelled'}
+                    {o.status}
                   </span>
                 </div>
               </div>
-              <p className="mt-2 text-xs text-farmer-muted">Placed {fmtDate(o.createdAt)}</p>
+              <p className="mt-2 text-xs text-farmer-muted">Placed {fmtDate(o.createdAt)} · Payment: {o.paymentStatus}</p>
             </li>
           ))}
         </ul>

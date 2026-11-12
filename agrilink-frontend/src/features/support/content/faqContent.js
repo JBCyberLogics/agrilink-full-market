@@ -1,6 +1,6 @@
 /**
- * FAQ content — the single centralized data module for the FAQ page
- * (edited here, not inside the page component).
+ * FAQ fixtures used only by isolated frontend tests. Runtime FAQ content is
+ * loaded from persisted records through GET /api/v1/faq.
  *
  * CONTENT INTEGRITY (AGRILINK-FAQ-GLOBAL-THEME-001): every answer was
  * cross-checked against the actual implementation in this repository:

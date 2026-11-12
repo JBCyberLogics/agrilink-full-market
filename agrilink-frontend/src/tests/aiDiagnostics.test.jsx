@@ -4,28 +4,26 @@ import { vi } from 'vitest'
 const api = vi.hoisted(() => ({ request: vi.fn() }))
 vi.mock('../services/api/client.js', () => ({ API_BASE: 'http://localhost:4300/api/v1', API_BASE_CONFIGURED: true, request: api.request }))
 
-import { AI_DIAGNOSTIC_FEATURES, NVIDIA_STATUS_CONTRACT, checkNvidiaConnection } from '../ai/diagnostics.js'
+import { AI_DIAGNOSTIC_FEATURES, AI_PROVIDER_DIAGNOSTIC_CONTRACT, checkProviderConnection } from '../ai/diagnostics.js'
 import { runAlgorithmSmokeTest } from '../ai/algorithmDiagnostics.js'
 
 describe('AI diagnostics contracts', () => {
   it('registers each of the twelve independent AI capabilities', () => {
     expect(AI_DIAGNOSTIC_FEATURES).toHaveLength(12)
     expect(new Set(AI_DIAGNOSTIC_FEATURES.map((feature) => feature.id)).size).toBe(12)
-    expect(NVIDIA_STATUS_CONTRACT.method).toBe('POST')
+    expect(AI_PROVIDER_DIAGNOSTIC_CONTRACT.owner).toBe('AgriLink Control')
+    expect(AI_PROVIDER_DIAGNOSTIC_CONTRACT.requiredPermission).toBe('ai.configure')
   })
 
-  it('does not claim NVIDIA connectivity when the configured provider is unavailable', async () => {
-    api.request.mockRejectedValueOnce({ status: 503, error: 'Configure a base URL, model, and key before testing the provider.' })
-    const result = await checkNvidiaConnection()
+  it('keeps provider diagnostics out of the Farmer/Buyer session realm', async () => {
+    const result = await checkProviderConnection()
     expect(result.status).toBe('BLOCKED')
-    expect(result.error).toMatch(/configure a base URL/i)
-    expect(api.request).toHaveBeenCalledWith('/admin/ai/diagnostics', expect.objectContaining({ method: 'POST', body: {} }))
+    expect(result.error).toMatch(/AgriLink Control/i)
+    expect(api.request).not.toHaveBeenCalled()
   })
 
-  it('reports a provider diagnostic as available only after a validated backend response', async () => {
-    api.request.mockResolvedValueOnce({ available: true, provider: 'nvidia', model: 'configured-test-model', responseValidated: true, checkedAt: '2026-11-06T00:00:00.000Z' })
-    const result = await checkNvidiaConnection()
-    expect(result).toMatchObject({ status: 'PASS', provider: 'nvidia', model: 'configured-test-model', responseValidated: true })
+  it('marks live inference as requiring explicit Admin confirmation', () => {
+    expect(AI_PROVIDER_DIAGNOSTIC_CONTRACT.liveInferenceRequiresExplicitConfirmation).toBe(true)
   })
 
   it('runs local algorithm checks without claiming external AI results', () => {

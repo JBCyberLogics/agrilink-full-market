@@ -22,6 +22,7 @@ import {
 import logoUrl from '../images/logo.png';
 import { StatusPill } from './components/ui/StatusPill';
 import { DEFAULT_PAGE, NAVIGATION, PAGE_BY_PATH, PAGES, type PageDefinition } from './config/navigation';
+import { canOpenPage } from './config/pagePermissions';
 import { AuthProvider, useAuth } from './modules/auth/context/AuthProvider';
 import { ProtectedRoute } from './modules/auth/guards/ProtectedRoute';
 import { AuthLoading } from './modules/auth/components/AuthLoading';
@@ -45,7 +46,9 @@ function readTheme(): Theme {
 }
 
 function PageContent({ page, navigate }: { page: PageDefinition; navigate: (path: string) => void }) {
-  const module = page.kind === 'overview' || page.kind === 'analytics'
+  const module = page.id === 'ai-usage'
+    ? <AdminPage page={page} navigate={navigate} />
+    : page.kind === 'overview' || page.kind === 'analytics'
     ? <DashboardPage page={page} navigate={navigate} />
     : page.kind === 'algorithm'
       ? <AlgorithmPage page={page} />
@@ -54,9 +57,9 @@ function PageContent({ page, navigate }: { page: PageDefinition; navigate: (path
 }
 
 function Sidebar({
-  currentPath, collapsed, mobileOpen, onCollapse, onClose, navigate,
+  currentPath, collapsed, mobileOpen, permissions, preview, onCollapse, onClose, navigate,
 }: {
-  currentPath: string; collapsed: boolean; mobileOpen: boolean; onCollapse: () => void; onClose: () => void; navigate: (path: string) => void;
+  currentPath: string; collapsed: boolean; mobileOpen: boolean; permissions: readonly string[]; preview: boolean; onCollapse: () => void; onClose: () => void; navigate: (path: string) => void;
 }) {
   const activePage = PAGE_BY_PATH.get(currentPath) ?? DEFAULT_PAGE;
   const [expanded, setExpanded] = useState<string[]>([activePage.group]);
@@ -79,10 +82,12 @@ function Sidebar({
         {!collapsed && <div className="workspace-label"><span>WORKSPACE</span><span className="workspace-label__indicator"><span /> Administration</span></div>}
         <nav className="sidebar-nav">
           {NAVIGATION.map((group) => {
+            const visibleItems = group.items.filter((item) => preview || canOpenPage(item, permissions));
+            if (!visibleItems.length) return null;
             const open = expanded.includes(group.label) || collapsed;
             return <section className={`nav-group${open ? ' nav-group--open' : ''}`} key={group.label}>
               {!collapsed && <button className="nav-group__heading" aria-expanded={expanded.includes(group.label)} onClick={() => toggleGroup(group.label)}><span>{group.label}</span><ChevronDown size={14} aria-hidden="true" /></button>}
-              {open && <div className="nav-group__items">{group.items.map((item) => {
+              {open && <div className="nav-group__items">{visibleItems.map((item) => {
                 const Icon = item.icon;
                 const selected = currentPath === item.path;
                 return <button key={item.id} className={`nav-item${selected ? ' nav-item--active' : ''}`} aria-current={selected ? 'page' : undefined} aria-label={collapsed ? item.title : undefined} title={collapsed ? item.title : undefined} onClick={() => navigate(item.path)}><Icon size={17} strokeWidth={selected ? 2 : 1.8} aria-hidden="true" /><span>{item.title}</span>{selected && <span className="nav-item__indicator" />}</button>;
@@ -116,10 +121,12 @@ function AppContent() {
   const isDevelopmentPreview = previewPath !== null;
   const activePath = previewPath ?? path;
   const page = PAGE_BY_PATH.get(activePath);
+  const permissions = auth.session?.administrator.permissions ?? [];
+  const isPageAllowed = (candidate: PageDefinition) => isDevelopmentPreview || canOpenPage(candidate, permissions);
   const matches = useMemo(() => {
     const search = query.trim().toLocaleLowerCase();
-    return search ? PAGES.filter((item) => `${item.title} ${item.group} ${item.description}`.toLocaleLowerCase().includes(search)).slice(0, 7) : [];
-  }, [query]);
+    return search ? PAGES.filter((item) => (isDevelopmentPreview || canOpenPage(item, permissions)) && `${item.title} ${item.group} ${item.description}`.toLocaleLowerCase().includes(search)).slice(0, 7) : [];
+  }, [query, isDevelopmentPreview, permissions]);
 
   useEffect(() => {
     if (window.location.pathname === '/') window.history.replaceState({}, '', LOGIN_PATH);
@@ -177,7 +184,8 @@ function AppContent() {
   }, []);
 
   function navigate(nextPath: string) {
-    if (!PAGE_BY_PATH.has(nextPath)) return;
+    const target = PAGE_BY_PATH.get(nextPath);
+    if (!target || !isPageAllowed(target)) return;
     let nextUrl = nextPath;
     if (import.meta.env.DEV && isDevelopmentPreview) nextUrl = getDevelopmentPreviewUrl(nextPath, true) ?? nextPath;
     if (nextUrl !== path) window.history.pushState({}, '', nextUrl);
@@ -190,16 +198,6 @@ function AppContent() {
   }
 
   function toggleTheme() { setTheme((current) => current === 'light' ? 'dark' : 'light'); }
-
-  function openDevelopmentPreview() {
-    if (!import.meta.env.DEV) return;
-    const previewUrl = getDevelopmentPreviewUrl(DEFAULT_PAGE.path, true);
-    if (!previewUrl) return;
-    window.history.pushState({}, '', previewUrl);
-    setPath(previewUrl);
-    setQuery('');
-    setSearchOpen(false);
-  }
 
   function exitDevelopmentPreview() {
     if (!isDevelopmentPreview) return;
@@ -215,7 +213,6 @@ function AppContent() {
       theme={theme}
       onToggleTheme={toggleTheme}
       onAuthenticated={() => navigate(returnPath)}
-      onDevelopmentPreview={import.meta.env.DEV ? openDevelopmentPreview : undefined}
     />
   );
 
@@ -224,7 +221,7 @@ function AppContent() {
     <ProtectedRoute fallback={loginPage} developmentPreview={isDevelopmentPreview}>
     <div className={`app-shell${isDevelopmentPreview ? ' app-shell--preview' : ''}`}>
       <a className="skip-link" href="#main-content">Skip to content</a>
-      <Sidebar currentPath={activePath} collapsed={collapsed} mobileOpen={mobileOpen} onCollapse={() => setCollapsed((current) => !current)} onClose={() => setMobileOpen(false)} navigate={navigate} />
+      <Sidebar currentPath={activePath} collapsed={collapsed} mobileOpen={mobileOpen} permissions={permissions} preview={isDevelopmentPreview} onCollapse={() => setCollapsed((current) => !current)} onClose={() => setMobileOpen(false)} navigate={navigate} />
       <div className={`app-main${collapsed ? ' app-main--collapsed' : ''}`}>
         {isDevelopmentPreview && <div className="dev-preview-banner" role="status"><ShieldAlert size={14} aria-hidden="true" /><strong>Development preview</strong><span>Dashboard shown without an authenticated session</span><button type="button" onClick={exitDevelopmentPreview}>Exit preview</button></div>}
         <header className="topbar">
@@ -253,7 +250,7 @@ function AppContent() {
           </div>
         </header>
         <main id="main-content" className="main-content" tabIndex={-1}>
-          {page ? <PageContent page={page} navigate={navigate} /> : <div className="page-stack"><div className="not-found panel"><span className="not-found__icon"><Icon size={22} /></span><span className="eyebrow">UNKNOWN ROUTE</span><h1>This section isn’t in the workspace.</h1><p>Open a section from the navigation to continue.</p><button className="button button--primary" onClick={() => navigate(DEFAULT_PAGE.path)}>Go to dashboard <ArrowRight size={16} /></button></div></div>}
+          {page ? isPageAllowed(page) ? <PageContent page={page} navigate={navigate} /> : <div className="page-stack"><div className="not-found panel" role="alert"><span className="not-found__icon"><ShieldAlert size={22} /></span><span className="eyebrow">ACCESS RESTRICTED</span><h1>You do not have access to this section.</h1><p>Your administrator role does not include the required permission.</p><button className="button button--primary" onClick={() => navigate(DEFAULT_PAGE.path)}>Open an available section <ArrowRight size={16} /></button></div></div> : <div className="page-stack"><div className="not-found panel"><span className="not-found__icon"><Icon size={22} /></span><span className="eyebrow">UNKNOWN ROUTE</span><h1>This section isn’t in the workspace.</h1><p>Open a section from the navigation to continue.</p><button className="button button--primary" onClick={() => navigate(DEFAULT_PAGE.path)}>Go to dashboard <ArrowRight size={16} /></button></div></div>}
           <footer className="app-footer"><span><img className="footer-logo" src={logoUrl} alt="AgriLink Control" /></span><span>Independent administration workspace</span><button onClick={() => navigate('/settings/general')}>Integration requirements <ExternalLink size={13} aria-hidden="true" /></button></footer>
         </main>
       </div>

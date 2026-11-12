@@ -23,7 +23,7 @@ const apiUnavailableError = () => ({
 
 const ACCESS_KEY = 'agrilink.accessToken'
 const REFRESH_KEY = 'agrilink.refreshToken'
-const SESSION_EVENT_KEY = 'agrilink.session-event'
+const SESSION_EVENT_KEY = 'agrilink.marketplace.session-event'
 export const AUTH_STORAGE_KEYS = { access: ACCESS_KEY, refresh: REFRESH_KEY, event: SESSION_EVENT_KEY }
 
 export const tokens = {
@@ -59,8 +59,13 @@ async function csrfToken() {
 }
 
 export function announceSessionEnded() {
-  try { localStorage.setItem(SESSION_EVENT_KEY, String(Date.now())) } catch { /* cross-tab signaling is best-effort */ }
-  try { new BroadcastChannel('agrilink.session').postMessage({ type: 'signed-out' }) } catch { /* unsupported browser */ }
+  try { localStorage.setItem(SESSION_EVENT_KEY, `signed-out:${Date.now()}`) } catch { /* cross-tab signaling is best-effort */ }
+  try { new BroadcastChannel('agrilink.marketplace.session').postMessage({ type: 'signed-out' }) } catch { /* unsupported browser */ }
+}
+
+export function announceSessionChanged() {
+  try { localStorage.setItem(SESSION_EVENT_KEY, `identity-changed:${Date.now()}`) } catch { /* cross-tab signaling is best-effort */ }
+  try { new BroadcastChannel('agrilink.marketplace.session').postMessage({ type: 'identity-changed' }) } catch { /* unsupported browser */ }
 }
 
 /* listeners notified when the session can no longer be refreshed */
@@ -148,10 +153,16 @@ export async function requestRaw(path, opts = {}) {
   const payload = await res.json().catch(() => null)
   if (!res.ok || payload?.success === false) {
     const firstDetail = payload?.errorSources?.[0] ?? payload?.errorMessages?.[0]
+    const code = payload?.code ?? payload?.error?.code
+    if (auth && res.status === 403 && code === 'SESSION_REALM_MISMATCH') {
+      tokens.clear()
+      expiredListeners.forEach((fn) => fn())
+    }
     throw {
       status: res.status,
+      code,
       error: payload?.message || firstDetail?.message || `Request failed (${res.status})`,
-      field: firstDetail?.path || undefined,
+      field: payload?.field || firstDetail?.path || undefined,
       details: payload,
       retryAfter: res.headers.get('Retry-After') || undefined,
     }

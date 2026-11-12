@@ -3,7 +3,7 @@
  * /api/v1 chat and message modules.
  */
 import { api } from '../../../services/api/client.js'
-import { chats } from '../../../services/api/endpoints.js'
+import { chats, messages as messageApi } from '../../../services/api/endpoints.js'
 
 const unwrapList = (res) => (Array.isArray(res) ? res : res?.data ?? res?.result ?? [])
 
@@ -17,6 +17,7 @@ export function normalizeInquiry(c = {}) {
     buyerName: other.fullName ?? other.name ?? 'Buyer',
     message: c.message ?? c.initialMessage?.text ?? '',
     reply: c.reply ?? '',
+    messages: Array.isArray(c.messages) ? c.messages.map((message) => ({ id: message.id ?? message._id, senderId: message.senderId ?? null, fromCurrentUser: message.fromCurrentUser === true, text: message.text ?? message.message ?? '', createdAt: message.createdAt ?? null })) : [],
     status,
     createdAt: c.createdAt ?? c.updatedAt,
   }
@@ -36,8 +37,16 @@ export async function farmerInquiries() {
 }
 
 export async function farmerRespondInquiry(id, status, reply = '') {
-  if (reply.trim()) await api.post('/message/send-message', { chatId: id, text: reply.trim() })
-  const nextStatus = String(status).toLowerCase() === 'closed' ? 'closed' : 'replied'
-  const result = await chats.setStatus(id, nextStatus)
-  return { inquiry: { id, status: result?.status ?? status, reply } }
+  if (String(status).toLowerCase() === 'closed') {
+    const result = await chats.setStatus(id, 'closed')
+    return { inquiry: { id, status: result?.status ?? 'Closed' } }
+  }
+  const text = String(reply ?? '').trim()
+  if (!text) throw { status: 422, code: 'REPLY_REQUIRED', field: 'reply', error: 'Write a reply before sending.' }
+  const result = await messageApi.send({ conversationId: id, text })
+  if (result?.conversation) return { inquiry: normalizeInquiry(result.conversation) }
+  const refreshed = await farmerInquiries()
+  const inquiry = refreshed.inquiries.find((item) => item.id === id)
+  if (!inquiry) throw { status: 502, error: 'The reply was sent, but the updated conversation could not be retrieved.' }
+  return { inquiry }
 }

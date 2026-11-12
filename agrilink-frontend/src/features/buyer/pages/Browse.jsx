@@ -10,8 +10,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertCircle, RotateCw, SlidersHorizontal, SearchX, ChevronLeft, ChevronRight, CheckCircle2 } from 'lucide-react'
 import { buyerSave, buyerUnsave } from '../services/buyerService'
 import { createInquiry } from '../../inquiries/services/inquiryService'
-import { CATEGORIES } from '../../../constants/index.js'
-import { useMarketFeed, useBuyerSaved } from '../hooks/useBuyerData'
+import { useMarketFeed, useBuyerSaved, useMarketCategories } from '../hooks/useBuyerData'
 import ProduceCard from '../components/ProduceCard'
 import RequestDialog from '../components/RequestDialog'
 import InquiryDialog from '../components/InquiryDialog'
@@ -42,6 +41,7 @@ const num = (v) => {
 export default function Browse({ filters, onFiltersChange }) {
   const feed = useMarketFeed()
   const savedQ = useBuyerSaved()
+  const categoryQ = useMarketCategories()
   const [page, setPage] = useState(1)
   const [busySave, setBusySave] = useState(null)
   const [dialog, setDialog] = useState(null) // listing open in the request dialog
@@ -162,12 +162,13 @@ export default function Browse({ filters, onFiltersChange }) {
           <label className="block">
             <span className="mb-1.5 block text-xs font-medium text-farmer-ink">Category</span>
             <select value={filters.category} onChange={setF('category')} aria-label="Filter by category" className={inputCls}>
-              {['All', ...CATEGORIES].map((c) => (
+              {['All', ...categoryQ.categories.map((item) => item.name)].map((c) => (
                 <option key={c} value={c}>
                   {c === 'All' ? 'All categories' : c}
                 </option>
               ))}
             </select>
+            {categoryQ.status === 'error' && <span role="status" className="mt-1 block text-xs text-farmer-muted">Active categories could not be loaded; category filtering is unavailable.</span>}
           </label>
           <label className="block">
             <span className="mb-1.5 block text-xs font-medium text-farmer-ink">County / region</span>

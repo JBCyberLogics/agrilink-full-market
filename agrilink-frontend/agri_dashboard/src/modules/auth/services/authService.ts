@@ -11,7 +11,10 @@ export const authService = {
   async login(credentials: LoginCredentials): Promise<LoginResult> {
     if (!ADMIN_API_CONFIGURED) return { status: 'not-configured' };
     try {
-      const result = await apiRequest<{ administrator: AuthenticatedSession['administrator']; expiresAt: string | null }>('/auth/admin/login', 'POST', credentials);
+      const result = await apiRequest<{ administrator: AuthenticatedSession['administrator']; expiresAt: string | null }>('/auth/admin/login', 'POST', {
+        username: credentials.identity.trim(),
+        password: credentials.password,
+      });
       if (!result.administrator?.id || !result.administrator.roles?.some((role) => ['admin', 'super_admin'].includes(role))) return { status: 'rejected' };
       return { status: 'authenticated', session: { administrator: result.administrator, expiresAt: result.expiresAt } };
     } catch (error) {
@@ -27,6 +30,7 @@ export const authService = {
       return { status: 'authenticated', session: { administrator: result.administrator, expiresAt: result.expiresAt } };
     } catch (error) {
       if (error instanceof Error && 'status' in error && Number((error as { status?: number }).status) === 401) return { status: 'unauthenticated' };
+      if (error instanceof Error && 'code' in error && (error as { code?: string }).code === 'SESSION_REALM_MISMATCH') return { status: 'unauthenticated' };
       return { status: 'error' };
     }
   },
@@ -38,8 +42,8 @@ export const authService = {
       const response = await apiRequest<{ serverInvalidated: boolean }>('/auth/admin/logout', 'POST', {});
       result = response.serverInvalidated ? { status: 'signed-out' } : { status: 'error' };
     } catch { /* caller clears only local session state and must not report server invalidation */ }
-    try { localStorage.setItem('agrilink.session-event', String(Date.now())); } catch { /* browser storage may be unavailable */ }
-    try { const channel = new BroadcastChannel('agrilink.session'); channel.postMessage({ type: 'signed-out' }); channel.close(); } catch { /* browser may not support channel messaging */ }
+    try { localStorage.setItem('agrilink.admin.session-event', String(Date.now())); } catch { /* browser storage may be unavailable */ }
+    try { const channel = new BroadcastChannel('agrilink.admin.session'); channel.postMessage({ type: 'signed-out' }); channel.close(); } catch { /* browser may not support channel messaging */ }
     return result;
   },
 };

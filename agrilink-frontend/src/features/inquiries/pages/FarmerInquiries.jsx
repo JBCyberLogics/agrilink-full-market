@@ -14,6 +14,7 @@ export default function Inquiries() {
   const [inquiries, setInquiries] = useState([])
   const [error, setError] = useState('')
   const [replying, setReplying] = useState(null) // inquiry id being replied to
+  const [replyDrafts, setReplyDrafts] = useState({})
 
   useEffect(() => {
     let alive = true
@@ -34,16 +35,13 @@ export default function Inquiries() {
       .catch(() => setStatus('error'))
   }
 
-  const respond = async (id, newStatus, reply) => {
+  const respond = async (id, newStatus) => {
     setReplying(id)
+    setError('')
     try {
-      /* PATCH the requested transition ('Replied' | 'Closed'). The earlier
-         build sent the page's outer loading-state string here, which the
-         server rejected on every click — fixed during the restructure. */
-      const d = await farmerRespondInquiry(id, newStatus, reply)
-      setInquiries((prev) =>
-        prev.map((i) => (i.id === d.inquiry.id ? { ...i, status: d.inquiry.status, reply: d.inquiry.reply } : i)),
-      )
+      const d = await farmerRespondInquiry(id, newStatus, replyDrafts[id] ?? '')
+      setInquiries((prev) => prev.map((item) => item.id === id ? { ...item, ...d.inquiry } : item))
+      if (String(newStatus).toLowerCase() === 'replied') setReplyDrafts((current) => ({ ...current, [id]: '' }))
     } catch (err) {
       setError((err?.error || err?.message) || 'Could not update this inquiry. Please try again.')
     } finally {
@@ -113,11 +111,7 @@ export default function Inquiries() {
                     About <span className="font-medium">{i.listingName}</span>
                   </p>
                   <p className="mt-0.5 text-xs text-farmer-muted">{i.buyerName} &middot; {i.message}</p>
-                  {i.reply && (
-                    <p className="mt-1.5 text-xs text-farmer-muted">
-                      <span className="font-medium text-farmer-ink">Your reply:</span> {i.reply}
-                    </p>
-                  )}
+                  {i.messages?.length > 0 && <ol aria-label="Conversation history" className="mt-2 space-y-1.5">{i.messages.map((message) => <li key={message.id} className="rounded-lg bg-farmer-page px-3 py-2 text-xs text-farmer-muted"><span className="font-semibold text-farmer-ink">{message.fromCurrentUser ? 'You' : i.buyerName}:</span> {message.text}<span className="ml-2 text-[10px]">{message.createdAt ? fmtDate(message.createdAt) : ''}</span></li>)}</ol>}
                 </div>
                 <div className="flex flex-col sm:flex-row items-end sm:items-start gap-2">
                   <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold">
@@ -128,17 +122,18 @@ export default function Inquiries() {
               <p className="mt-2 text-xs text-farmer-muted">Sent {fmtDate(i.createdAt)}</p>
               {i.status === 'Open' && (
                 <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <label className="basis-full"><span className="mb-1 block text-xs font-semibold text-farmer-ink">Reply to buyer</span><textarea value={replyDrafts[i.id] ?? ''} onChange={(event) => setReplyDrafts((current) => ({ ...current, [i.id]: event.target.value }))} maxLength={5000} rows={3} className="w-full rounded-lg border border-farmer-line bg-paper px-3 py-2 text-sm text-farmer-ink" placeholder="Write a reply" /></label>
                   <button
                     type="button"
-                    onClick={() => respond(i.id, 'Replied', '')}
-                    disabled={replying === i.id}
+                    onClick={() => respond(i.id, 'Replied')}
+                    disabled={replying === i.id || !(replyDrafts[i.id] ?? '').trim()}
                     className="inline-flex h-9 items-center gap-1 rounded-lg border border-farmer-line bg-paper px-3 text-[12px] font-semibold text-farmer-ink hover:border-farmer-brand/40 hover:text-farmer-brand disabled:opacity-50"
                   >
-                    Mark replied
+                    {replying === i.id ? 'Sending…' : 'Send reply'}
                   </button>
                   <button
                     type="button"
-                    onClick={() => respond(i.id, 'Closed', '')}
+                    onClick={() => respond(i.id, 'Closed')}
                     disabled={replying === i.id}
                     className="inline-flex h-9 items-center gap-1 rounded-lg border border-farmer-line bg-paper px-3 text-[12px] font-semibold text-farmer-ink hover:border-farmer-brand/40 hover:text-farmer-brand disabled:opacity-50"
                   >
@@ -146,6 +141,7 @@ export default function Inquiries() {
                   </button>
                 </div>
               )}
+              {error && replying === null && <p role="alert" className="mt-2 text-xs text-farmer-danger">{error}</p>}
             </li>
           ))}
         </ul>

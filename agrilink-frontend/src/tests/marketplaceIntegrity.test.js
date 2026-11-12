@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn() }))
+const categoryApi = vi.hoisted(() => ({ list: vi.fn() }))
 vi.mock('../services/api/endpoints.js', () => ({
   products: api,
-  categories: { list: vi.fn().mockResolvedValue([]) },
+  categories: categoryApi,
   favorites: { list: vi.fn().mockResolvedValue({ data: [] }), toggle: vi.fn() },
 }))
 
-import { isCompleteMarketplaceListing, marketListings, normalizeProduct } from '../features/marketplace/services/marketplaceService.js'
+import { isCompleteMarketplaceListing, marketCategories, marketListings, normalizeProduct } from '../features/marketplace/services/marketplaceService.js'
 
 describe('marketplace listing data integrity', () => {
   beforeEach(() => vi.clearAllMocks())
@@ -41,5 +42,11 @@ describe('marketplace listing data integrity', () => {
 
     expect(result.listings.map((listing) => listing.id)).toEqual(['complete'])
     expect(result.meta).toEqual({ total: 3 })
+  })
+
+  it('uses categories returned by the backend instead of a local category catalog', async () => {
+    categoryApi.list.mockResolvedValue([{ id: 'category-db-id', name: 'Root Vegetables' }])
+    await expect(marketCategories()).resolves.toEqual([{ id: 'category-db-id', name: 'Root Vegetables' }])
+    expect(categoryApi.list).toHaveBeenCalledOnce()
   })
 })

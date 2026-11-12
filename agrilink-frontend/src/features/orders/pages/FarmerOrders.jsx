@@ -12,6 +12,14 @@ import { kes, fmtDate } from '../../../utils/format'
 import EmptyState from '../../../components/feedback/EmptyState'
 import ConfirmDelete from '../../../components/ui/ConfirmDelete'
 
+const NEXT_STATUS_ACTIONS = {
+  Confirmed: [['Packed', 'Mark packed'], ['Ready for pickup', 'Mark ready for pickup']],
+  Packed: [['In transit', 'Mark in transit'], ['Ready for pickup', 'Mark ready for pickup']],
+  'In transit': [['Out for delivery', 'Mark out for delivery'], ['Delivered', 'Mark delivered']],
+  'Out for delivery': [['Delivered', 'Mark delivered']],
+  'Ready for pickup': [['Delivered', 'Mark collected']],
+}
+
 export default function Orders() {
   const [status, setStatus] = useState('loading') // loading | ok | error
   const [orders, setOrders] = useState([])
@@ -40,7 +48,7 @@ export default function Orders() {
   const updateStatus = async (id, newStatus) => {
     try {
       const d = await farmerUpdateOrderStatus(id, newStatus)
-      setOrders((prev) => prev.map((o) => (o.id === d.order.id ? { ...o, status: d.order.status, paymentStatus: d.order.paymentStatus } : o)))
+      setOrders((prev) => prev.map((o) => (o.id === d.order.id ? { ...o, status: d.order.status, paymentStatus: d.order.paymentStatus ?? o.paymentStatus } : o)))
     } catch (err) {
       /* the transport rejects with { status, error }: surface the server's
          exact message through the callers' existing error mapping */
@@ -60,12 +68,15 @@ export default function Orders() {
     }
   }
 
-  const confirm = async (id) => {
+  const advance = async (id, nextStatus) => {
+    setCanceling(id)
     try {
-      await updateStatus(id, 'Confirmed')
+      await updateStatus(id, nextStatus)
       refresh()
     } catch (err) {
-      setError(err?.message || 'Could not confirm this order. Please try again.')
+      setError(err?.message || `Could not update this order to ${nextStatus}. Please try again.`)
+    } finally {
+      setCanceling(null)
     }
   }
 
@@ -136,16 +147,16 @@ export default function Orders() {
                 <div className="flex flex-col sm:flex-row items-end sm:items-start gap-2">
                   <p className="text-sm font-semibold text-farmer-ink tabular-nums">{kes(o.totalAmount)}</p>
                   <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold">
-                    {o.status === 'Pending' ? 'Pending · unpaid' : o.status === 'Confirmed' ? 'Confirmed' : 'Cancelled'}
+                    {o.status}
                   </span>
                 </div>
               </div>
-              <p className="mt-2 text-xs text-farmer-muted">Placed {fmtDate(o.createdAt)}</p>
+              <p className="mt-2 text-xs text-farmer-muted">Placed {fmtDate(o.createdAt)} · Payment: {o.paymentStatus}</p>
               {o.status === 'Pending' && (
                 <div className="mt-3 flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => confirm(o.id)}
+                    onClick={() => advance(o.id, 'Confirmed')}
                     disabled={canceling === o.id}
                     className="inline-flex h-9 items-center gap-1 rounded-lg border border-farmer-line bg-paper px-3 text-[12px] font-semibold text-farmer-ink hover:border-farmer-brand/40 hover:text-farmer-brand disabled:opacity-50"
                   >
@@ -156,6 +167,21 @@ export default function Orders() {
                     onConfirm={() => cancel(o.id)}
                     className={canceling === o.id ? 'opacity-50' : ''}
                   />
+                </div>
+              )}
+              {NEXT_STATUS_ACTIONS[o.status]?.length > 0 && (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {NEXT_STATUS_ACTIONS[o.status].map(([nextStatus, actionLabel]) => (
+                    <button
+                      key={nextStatus}
+                      type="button"
+                      onClick={() => advance(o.id, nextStatus)}
+                      disabled={canceling === o.id}
+                      className="inline-flex h-9 items-center gap-1 rounded-lg border border-farmer-line bg-paper px-3 text-[12px] font-semibold text-farmer-ink hover:border-farmer-brand/40 hover:text-farmer-brand disabled:opacity-50"
+                    >
+                      {actionLabel}
+                    </button>
+                  ))}
                 </div>
               )}
             </li>

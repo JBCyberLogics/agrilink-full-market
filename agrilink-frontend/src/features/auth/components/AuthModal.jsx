@@ -178,12 +178,14 @@ export default function AuthModal({ open, onClose, onAuth, initialTab = 'login',
       onAuth(apiUser)
     } catch (err) {
       const next = {}
-      if (err?.field) next[err.field] = err.error
+      const errorCopy = `${err?.error ?? ''} ${err?.message ?? ''}`
+      const roleMismatch = ['ACCOUNT_ROLE_MISMATCH', 'SESSION_REALM_MISMATCH'].includes(err?.code)
+        || err?.field === 'role'
+        || /account.{0,40}registered as|account role mismatch|selected (account )?role/i.test(errorCopy)
+      if (tab === 'login' && (roleMismatch || err?.status === 401))
+        next.global = 'Unable to sign in with those credentials. Please check your details and try again.'
+      else if (err?.field) next[err.field] = err.error
       else next.global = err?.error || 'Something went wrong. Please try again.'
-      /* role gate 403: pre-select the account's real role so the user
-         can simply press Sign In again */
-      if (err?.field === 'role' && (err?.accountRole === 'Buyer' || err?.accountRole === 'Farmer'))
-        setRole(err.accountRole)
       setErrors(next)
     } finally {
       setSubmitting(false)

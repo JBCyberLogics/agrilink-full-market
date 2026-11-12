@@ -59,7 +59,7 @@ import {
 import Browse, { EMPTY_FILTERS } from "../features/buyer/pages/Browse";
 import { parseHash } from "../router/routes";
 import { clearServerCart } from "../features/cart/services/cartService";
-import { AUTH_STORAGE_KEYS } from "../services/api/client";
+import { AUTH_STORAGE_KEYS, onSessionExpired } from "../services/api/client";
 import { cart as cartApi } from "../services/api/endpoints";
 
 const EMPTY_CHECKOUT_ADDRESS = { phone: '', line1: '', line2: '', city: '', county: '', postal: '' };
@@ -378,7 +378,7 @@ export default function App() {
          Network failures (status 0) are NOT treated as logout — the user
          keeps whatever session the cookie really holds (retry on refresh). */
       .catch((err) => {
-        if (err?.status === 401) apiLogout().catch(() => {});
+        if (err?.status === 401 || err?.code === 'SESSION_REALM_MISMATCH') apiLogout().catch(() => {});
       })
       .finally(() => setAuthReady(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -395,6 +395,16 @@ export default function App() {
        all of the above for its own role */
   const handleAuth = useCallback(
     (authUser) => {
+      const storedCartOwner = localStorage.getItem(CART_OWNER_KEY);
+      const identityChanged = (user?.id && authUser?.id && user.id !== authUser.id)
+        || (storedCartOwner && authUser?.id && storedCartOwner !== authUser.id);
+      if (identityChanged) {
+        sessionEpoch.current += 1;
+        setCart([]);
+        localStorage.removeItem(CART_STORAGE_KEY);
+        localStorage.removeItem(CART_OWNER_KEY);
+        setCheckoutAddress(EMPTY_CHECKOUT_ADDRESS);
+      }
       setUser(authUser);
       setAuthOpen(false);
       const target = returnTo.current;
@@ -424,7 +434,7 @@ export default function App() {
         goRoute(deep);
       }
     },
-    [goRoute],
+    [goRoute, user],
   );
 
   const [notice, setNotice] = useState(null); // sign-out confirmation (aria-live)
@@ -471,25 +481,66 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
+    const onIdentityChanged = () => {
+      if (!user) return;
+      const epoch = ++sessionEpoch.current;
+      setUser(null);
+      setCart([]);
+      localStorage.removeItem(CART_STORAGE_KEY);
+      localStorage.removeItem(CART_OWNER_KEY);
+      setCheckoutAddress(EMPTY_CHECKOUT_ADDRESS);
+      setAuthReady(false);
+      fetchMe()
+        .then((nextUser) => {
+          if (epoch !== sessionEpoch.current) return;
+          if (nextUser) handleAuth(nextUser);
+          else { goRoute('shop'); setNotice('The marketplace session changed. Sign in again to continue.'); }
+        })
+        .catch(() => {
+          if (epoch === sessionEpoch.current) {
+            goRoute('shop');
+            setNotice('The marketplace session could not be restored. Sign in again to continue.');
+          }
+        })
+        .finally(() => setAuthReady(true));
+    };
     const onSessionEnded = () => {
       if (!user || storageLogoutHandled.current) return;
       storageLogoutHandled.current = true;
       sessionEpoch.current += 1;
       setUser(null);
       setCart([]);
+      localStorage.removeItem(CART_STORAGE_KEY);
+      localStorage.removeItem(CART_OWNER_KEY);
       returnTo.current = null;
       setCheckoutAddress(EMPTY_CHECKOUT_ADDRESS);
       goRoute('shop');
       setNotice('Your session ended in another tab.');
     };
     const onStorage = (event) => {
-      if (event.key === AUTH_STORAGE_KEYS.event && event.newValue) onSessionEnded();
+      if (event.key !== AUTH_STORAGE_KEYS.event || !event.newValue) return;
+      if (event.newValue.startsWith('signed-out:')) onSessionEnded();
+      else if (event.newValue.startsWith('identity-changed:')) onIdentityChanged();
     };
     let channel;
-    try { channel = new BroadcastChannel('agrilink.session'); channel.onmessage = (event) => { if (event.data?.type === 'signed-out') onSessionEnded(); }; } catch { /* unsupported browser */ }
+    try { channel = new BroadcastChannel('agrilink.marketplace.session'); channel.onmessage = (event) => { if (event.data?.type === 'signed-out') onSessionEnded(); else if (event.data?.type === 'identity-changed') onIdentityChanged(); }; } catch { /* unsupported browser */ }
     window.addEventListener('storage', onStorage);
     return () => { window.removeEventListener('storage', onStorage); channel?.close(); };
   }, [goRoute, user]);
+
+  useEffect(() => onSessionExpired(() => {
+    if (!user || storageLogoutHandled.current) return;
+    storageLogoutHandled.current = true;
+    sessionEpoch.current += 1;
+    setUser(null);
+    setCart([]);
+    localStorage.removeItem(CART_STORAGE_KEY);
+    localStorage.removeItem(CART_OWNER_KEY);
+    returnTo.current = null;
+    setCheckoutAddress(EMPTY_CHECKOUT_ADDRESS);
+    goRoute('shop');
+    setNotice('Your Farmer/Buyer session expired or belongs to another AgriLink app. Sign in again.');
+  }), [goRoute, user]);
 
   const syncAccountProfile = useCallback((profile) => {
     setUser((current) => current ? {
@@ -653,6 +704,7 @@ export default function App() {
             <AdminWorkspaceLink />
           ) : route.startsWith("buyer/") ? (
             <BuyerShell
+              key={user?.id ?? 'signed-out'}
               user={user}
               page={buyerPage}
               onNavigate={goRoute}
@@ -670,6 +722,7 @@ export default function App() {
             </BuyerShell>
           ) : (
             <FarmerShell
+              key={user?.id ?? 'signed-out'}
               user={user}
               page={page}
               onNavigate={goRoute}

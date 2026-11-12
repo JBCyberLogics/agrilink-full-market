@@ -6,14 +6,9 @@ import { api, request, requestRaw, tokens } from './client.js'
 
 const enc = encodeURIComponent
 
-/* Send the token in the header (lowercase + Authorization) and, for endpoints
-   that read from req.body.token, also include it in the JSON payload. */
-const withToken = (token) => ({
-  headers: {
-    token: token || '',
-  },
-  auth: false,
-})
+/* OTP challenges are validated from the JSON body; these requests do not
+   require an authenticated user session. CSRF protection remains in client.js. */
+const otpRequestOptions = { auth: false }
 
 /* ----------------------------------------------------------------- Auth */
 export const auth = {
@@ -37,13 +32,14 @@ export const auth = {
     return data
   },
   forgotPasswordOtp: (email) => api.post('/auth/forgot-password-otp', { email }, { auth: false }),
+  forgotPasswordOtpResend: (token) => api.patch('/auth/forgot-password-otp-resend', { token }, { auth: false }),
   forgotPasswordOtpMatch: (token, otp) =>
-    api.patch('/auth/forgot-password-otp-match', { otp, token }, withToken(token)),
+    api.patch('/auth/forgot-password-otp-match', { otp, token }, otpRequestOptions),
   forgotPasswordReset: (token, newPassword, confirmPassword) =>
     api.patch(
       '/auth/forgot-password-reset',
       { newPassword, confirmPassword, token },
-      withToken(token),
+      otpRequestOptions,
     ),
   changePassword: (body) => api.patch('/auth/change-password', body),
   logout: async () => { const result = await api.post('/auth/logout', {}); tokens.clear(); return result },
@@ -51,14 +47,14 @@ export const auth = {
 
 /* ------------------------------------------------------------------ OTP */
 export const otp = {
-  resend: (token) => api.patch('/otp/resend-otp', { token }, withToken(token)),
+  resend: (token) => api.patch('/otp/resend-otp', { token }, otpRequestOptions),
 }
 
 /* ----------------------------------------------------------------- User */
 export const users = {
   create: (body) => api.post('/users/create', body, { auth: false }),
   verifyOtp: (token, code) =>
-    api.post('/users/create-user-verify-otp', { otp: code, token }, withToken(token)),
+    api.post('/users/create-user-verify-otp', { otp: code, token }, otpRequestOptions),
   myProfile: () => api.get('/users/my-profile'),
   updateMyProfile: (body) => api.patch('/users/update-my-profile', body),
   deleteMyAccount: (body) => request('/users/delete-my-account', { method: 'DELETE', body }),

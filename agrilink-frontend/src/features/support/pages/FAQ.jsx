@@ -9,14 +9,14 @@
  *   the relationship is programmatically complete. Multiple answers may
  *   stay open; Enter/Space work (native button activation); expansion
  *   animates subtly and respects prefers-reduced-motion.
- * • Search scans question + answer text, combines with the selected
+ * • Search scans saved question + answer text, combines with the selected
  *   category, updates live, and offers a clear action with an honest empty
- *   state. All client-side — no backend involved.
+ *   state. Published content is loaded from the shared backend.
  * • Theming: every element reads the shared theme tokens from
  *   styles/index.css, so the page carries no theme state of its own.
  * • Links hit real hash routes (#/contact, #/start-selling, #/how-it-works).
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Search,
   Sprout,
@@ -32,9 +32,9 @@ import {
   Headset,
   Wheat,
 } from 'lucide-react'
-import { FAQ_CATEGORIES, FAQ_ITEMS } from '../content/faqContent'
+import { api } from '../../../services/api/client.js'
 
-const ALL_QUESTIONS = FAQ_CATEGORIES[0]
+const ALL_QUESTIONS = 'All Questions'
 
 /* Icon per category chip (existing icon library, no emoji) */
 const CATEGORY_ICONS = {
@@ -53,17 +53,39 @@ export default function FAQ() {
   const [category, setCategory] = useState(ALL_QUESTIONS)
   const [query, setQuery] = useState('')
   const [openIds, setOpenIds] = useState(() => new Set())
+  const [items, setItems] = useState([])
+  const [loadState, setLoadState] = useState('loading')
+  const [retry, setRetry] = useState(0)
+
+  useEffect(() => {
+    let active = true
+    setLoadState('loading')
+    api.get('/faq').then((result) => {
+      if (!Array.isArray(result)) throw new Error('FAQ data is invalid.')
+      const saved = result.filter((item) => item && typeof item.question === 'string' && typeof item.answer === 'string')
+      if (!active) return
+      setItems(saved.map((item) => ({ ...item, category: typeof item.category === 'string' && item.category.trim() ? item.category : 'General' })))
+      setLoadState('ready')
+    }).catch(() => {
+      if (!active) return
+      setItems([])
+      setLoadState('error')
+    })
+    return () => { active = false }
+  }, [retry])
+
+  const faqCategories = useMemo(() => [ALL_QUESTIONS, ...new Set(items.map((item) => item.category))], [items])
 
   const q = query.trim().toLowerCase()
 
   /* category ∩ search, live as the user types */
   const visible = useMemo(() => {
-    return FAQ_ITEMS.filter((item) => {
+    return items.filter((item) => {
       if (category !== ALL_QUESTIONS && item.category !== category) return false
       if (!q) return true
       return item.question.toLowerCase().includes(q) || item.answer.toLowerCase().includes(q)
     })
-  }, [category, q])
+  }, [items, category, q])
 
   const toggleOpen = (id) => {
     setOpenIds((prev) => {
@@ -135,7 +157,7 @@ export default function FAQ() {
         aria-label="Filter questions by category"
         className="scrollbar-none mt-4 -mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0"
       >
-        {FAQ_CATEGORIES.map((cat) => {
+        {faqCategories.map((cat) => {
           const Icon = CATEGORY_ICONS[cat] ?? Sprout
           const active = category === cat
           return (
@@ -159,12 +181,28 @@ export default function FAQ() {
 
       {/* ------------------------------ results ------------------------------ */}
       <p className="mt-5 text-xs font-medium text-muted" aria-live="polite">
-        {visible.length} question{visible.length === 1 ? '' : 's'}
-        {filtersActive ? ' matching your filters' : ''}
+        {loadState === 'loading' ? 'Loading questions…' : loadState === 'error' ? 'FAQ content is unavailable.' : `${visible.length} question${visible.length === 1 ? '' : 's'}${filtersActive ? ' matching your filters' : ''}`}
       </p>
 
       {/* --------------------------- FAQ accordion ---------------------------- */}
-      {visible.length === 0 ? (
+      {loadState === 'loading' ? (
+        <div className="mt-3 rounded-2xl border border-line bg-paper px-6 py-12 text-center" role="status">
+          <p className="text-sm text-muted">Loading published answers from AgriLink.</p>
+        </div>
+      ) : loadState === 'error' ? (
+        <div className="mt-3 rounded-2xl border border-dashed border-line-strong bg-paper px-6 py-12 text-center" role="alert">
+          <h2 className="font-display text-lg font-bold text-ink">FAQ content could not be loaded</h2>
+          <p className="mt-1 text-sm text-muted">Check your connection and try again.</p>
+          <button type="button" onClick={() => setRetry((value) => value + 1)} className="mt-5 inline-flex h-10 items-center gap-2 rounded-full bg-brand px-5 text-sm font-semibold text-white shadow-soft hover:bg-brand-deep">
+            <RotateCcw size={14} aria-hidden="true" /> Retry
+          </button>
+        </div>
+      ) : items.length === 0 ? (
+        <div className="mt-3 rounded-2xl border border-dashed border-line-strong bg-paper px-6 py-12 text-center">
+          <h2 className="font-display text-lg font-bold text-ink">No answers have been published</h2>
+          <p className="mt-1 text-sm text-muted">There are no FAQ records available yet. Contact the AgriLink team if you need help.</p>
+        </div>
+      ) : visible.length === 0 ? (
         <div className="mt-3 flex flex-col items-center rounded-2xl border border-dashed border-line-strong bg-paper px-6 py-14 text-center">
           <span className="grid h-14 w-14 place-items-center rounded-2xl bg-soft text-muted-2">
             <SearchX size={26} aria-hidden="true" />

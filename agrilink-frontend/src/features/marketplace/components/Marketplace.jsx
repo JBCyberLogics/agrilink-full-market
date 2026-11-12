@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { SearchX, Sprout, RefreshCw } from 'lucide-react'
-import { CATEGORY_FILTERS } from '../../../constants/index.js'
 import { marketListings, marketCategories } from '../services/marketplaceService'
 import CategoryFilter from './CategoryFilter'
 import ProductCard from './ProductCard'
@@ -34,6 +33,8 @@ const toCard = (l) => ({
 export default function Marketplace({ search, onClearSearch, onAddToCart, onInquire }) {
   const [feed, setFeed] = useState(null) // null = loading · [] = empty · array = live data
   const [dead, setDead] = useState(false) // API unreachable
+  const [categoryNames, setCategoryNames] = useState([])
+  const [categoriesUnavailable, setCategoriesUnavailable] = useState(false)
   const [category, setCategory] = useState('All')
   const [selected, setSelected] = useState(null)
   const gridRef = useRef(null)
@@ -41,13 +42,17 @@ export default function Marketplace({ search, onClearSearch, onAddToCart, onInqu
   const load = () => {
     setFeed(null)
     setDead(false)
-    // Prime the category id→name cache first so listings that carry a raw
-    // ObjectId resolve to "Vegetables" instead of showing a hex string.
-    marketCategories()
-      .catch(() => {})
-      .then(() => marketListings())
-      .then((d) => setFeed((d.listings || []).map(toCard)))
-      .catch(() => setDead(true))
+    setCategory('All')
+    setCategoriesUnavailable(false)
+    Promise.allSettled([marketCategories(), marketListings()]).then(([categoryResult, listingResult]) => {
+      if (categoryResult.status === 'fulfilled') setCategoryNames(categoryResult.value.map((item) => item.name).filter(Boolean))
+      else {
+        setCategoryNames([])
+        setCategoriesUnavailable(true)
+      }
+      if (listingResult.status === 'fulfilled') setFeed((listingResult.value.listings || []).map(toCard))
+      else setDead(true)
+    })
   }
 
   /* the feed is refetched every time the shop mounts (route change):
@@ -68,12 +73,11 @@ export default function Marketplace({ search, onClearSearch, onAddToCart, onInqu
   })
 
   /* keep counts per category (unfiltered by search): badges on pills */
-  const counts = Object.fromEntries(
-    CATEGORY_FILTERS.map((c) => [
-      c,
-      c === 'All' ? products.length : products.filter((p) => p.category === c).length,
-    ]),
-  )
+  const filters = ['All', ...categoryNames]
+  const counts = Object.fromEntries(filters.map((name) => [
+    name,
+    name === 'All' ? products.length : products.filter((product) => product.category === name).length,
+  ]))
 
   /* ---------- product card mount animation stagger ---------- */
   useEffect(() => {
@@ -114,7 +118,8 @@ export default function Marketplace({ search, onClearSearch, onAddToCart, onInqu
       </div>
 
       {/* ---------------- category pills ---------------- */}
-      <CategoryFilter active={category} onChange={setCategory} counts={counts} />
+      {categoriesUnavailable && <p role="status" className="text-xs text-muted">Category filters are unavailable right now. Showing available listings without category filters.</p>}
+      <CategoryFilter active={category} onChange={setCategory} counts={counts} categories={filters} />
 
       {/* ---------------- product grid / states ---------------- */}
       {!feed ? (

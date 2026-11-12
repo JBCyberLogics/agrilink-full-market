@@ -4,7 +4,11 @@ const api = vi.hoisted(() => ({ requestRaw: vi.fn() }))
 
 const config = vi.hoisted(() => ({
   AI_CONFIG: { proxyUrl: 'https://agrilink-proxy.test/ai', timeoutMs: 10 },
-  AI_CAPABILITY_LIST: ['shared/agricultural-assistant'],
+  AI_CAPABILITY_LIST: [
+    'shared/agricultural-assistant','shared/market-advisor','shared/recommendations-center',
+    'farmer/crop-advisor','farmer/price-advisor','farmer/listing-assistant','farmer/matching-assistant',
+    'farmer/harvest-advisor','farmer/net-profit-advisor','buyer/produce-finder','buyer/supplier-advisor','buyer/purchase-assistant',
+  ],
 }))
 
 vi.mock('../ai/config.js', () => config)
@@ -37,6 +41,18 @@ describe('AI client backend contract', () => {
       body: { message: 'Test request' },
     }))
     expect(result).toMatchObject({ ok: true, data: { content: 'Response from an isolated backend fixture.' }, meta: { provider: 'nvidia', model: 'test-model' } })
+  })
+
+  it('sends all twelve capabilities through the same AgriLink backend proxy', async () => {
+    for (const capability of config.AI_CAPABILITY_LIST) {
+      api.requestRaw.mockResolvedValueOnce({
+        success: true,
+        data: { capability, data: { content: 'A validated capability response.' }, meta: { provider: 'server-selected', model: 'configured-by-admin' } },
+      })
+      await expect(requestAI(capability, { message: 'Agricultural test request' })).resolves.toMatchObject({ ok: true })
+      expect(api.requestRaw).toHaveBeenLastCalledWith(`/ai/${capability}`, expect.objectContaining({ method: 'POST' }))
+    }
+    expect(api.requestRaw).toHaveBeenCalledTimes(12)
   })
 
   it('surfaces provider proxy rate limits and retry metadata without retrying in the browser', async () => {

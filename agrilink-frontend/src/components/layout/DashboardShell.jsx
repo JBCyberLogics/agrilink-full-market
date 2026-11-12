@@ -121,8 +121,8 @@ function UserFooter({ user, onSignOut }) {
   return (
     <div className="mt-auto shrink-0 border-t border-farmer-line pt-4">
       <div className="flex items-center gap-2.5 px-1">
-        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-farmer-primary font-display text-xs font-bold text-white" aria-hidden="true">
-          {getUserInitials(user)}
+        <span className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-full bg-farmer-primary font-display text-xs font-bold text-white" aria-label={user.image ? `${displayName} profile picture` : `${displayName} account avatar`}>
+          {user.image ? <img src={user.image} alt="" className="h-full w-full object-cover" /> : getUserInitials(user)}
         </span>
         <span className="min-w-0 leading-tight">
           <span className="block truncate text-[13px] font-semibold text-farmer-ink">{displayName}</span>

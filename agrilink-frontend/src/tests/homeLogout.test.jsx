@@ -81,13 +81,30 @@ describe('authenticated Home action', () => {
 
     act(() => {
       window.dispatchEvent(new StorageEvent('storage', {
-        key: 'agrilink.session-event',
-        oldValue: 'previous-event',
-        newValue: String(Date.now()),
+        key: 'agrilink.marketplace.session-event',
+        oldValue: 'signed-out:previous',
+        newValue: `signed-out:${Date.now()}`,
       }))
     })
 
     expect(await screen.findByRole('heading', { name: /from the farm gate, straight to your table/i })).toBeDefined()
     expect(screen.getByText(/session ended in another tab/i)).toBeDefined()
+  })
+
+  it('reloads marketplace identity after another same-origin tab changes accounts', async () => {
+    render(<App />)
+    await screen.findByRole('button', { name: /home, sign out/i })
+    authService.me.mockResolvedValue({ id: 'farmer-2', name: 'Farmer Account', email: 'farmer@example.test', role: 'Farmer' })
+
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: 'agrilink.marketplace.session-event',
+        oldValue: 'identity-changed:previous',
+        newValue: `identity-changed:${Date.now()}`,
+      }))
+    })
+
+    expect(await screen.findByRole('button', { name: /farmer dashboard/i })).toBeDefined()
+    expect(screen.queryByRole('button', { name: /buyer dashboard/i })).toBeNull()
   })
 })

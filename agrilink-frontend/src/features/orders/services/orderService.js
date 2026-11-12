@@ -7,11 +7,16 @@ import { orders } from '../../../services/api/endpoints.js'
 const unwrapList = (res) => (Array.isArray(res) ? res : res?.data ?? res?.result ?? [])
 
 const STATUS_LABEL = {
-  pending: 'Pending', confirmed: 'Confirmed', packed: 'Confirmed', in_transit: 'Confirmed',
-  out_for_delivery: 'Confirmed', ready_for_pickup: 'Confirmed', delivered: 'Delivered',
+  pending: 'Pending', confirmed: 'Confirmed', packed: 'Packed', in_transit: 'In transit',
+  out_for_delivery: 'Out for delivery', ready_for_pickup: 'Ready for pickup', delivered: 'Delivered',
   cancelled: 'Cancelled', canceled: 'Cancelled',
 }
 const label = (s) => s == null || s === '' ? 'Unknown' : STATUS_LABEL[String(s).toLowerCase()] ?? String(s)
+const PAYMENT_STATUS_LABEL = {
+  pending: 'Pending', pending_verification: 'Pending verification', paid: 'Paid',
+  failed: 'Failed', cancelled: 'Cancelled', canceled: 'Cancelled', refunded: 'Refunded',
+}
+const paymentLabel = (s) => s == null || s === '' ? 'Unavailable' : PAYMENT_STATUS_LABEL[String(s).toLowerCase()] ?? String(s)
 
 const positiveNumber = (value) => {
   if (value === null || value === undefined || value === '') return null
@@ -20,7 +25,10 @@ const positiveNumber = (value) => {
 }
 
 /* UI transitions → backend delivery stage */
-const STAGE_FOR = { Confirmed: 'packed', Delivered: 'delivered' }
+const STAGE_FOR = {
+  Confirmed: 'confirmed', Packed: 'packed', 'In transit': 'in_transit',
+  'Out for delivery': 'out_for_delivery', 'Ready for pickup': 'ready_for_pickup', Delivered: 'delivered',
+}
 
 export function normalizeOrder(o = {}) {
   const candidateItems = o.orderItems ?? o.items ?? o.products
@@ -40,7 +48,7 @@ export function normalizeOrder(o = {}) {
     unitPrice,
     totalAmount,
     status: label(o.deliveryStage ?? o.status ?? o.orderStatus),
-    paymentStatus: o.paymentStatus,
+    paymentStatus: paymentLabel(o.paymentStatus),
     buyerName: o.user?.fullName ?? o.user?.name ?? o.customer?.name ?? 'Buyer name unavailable',
     createdAt: o.createdAt,
     items,
@@ -81,5 +89,5 @@ export async function farmerUpdateOrderStatus(id, status) {
   if (!stage) throw { status: 400, error: `"${status}" is not a valid order update.` }
   const result = await orders.updateDeliveryStage(id, { stage })
   const updated = normalizeOrder({ _id: id, ...(result?.data ?? result ?? {}) })
-  return { order: { ...updated, id, status: label(updated.status) === 'Pending' ? status : updated.status } }
+  return { order: { ...updated, id } }
 }

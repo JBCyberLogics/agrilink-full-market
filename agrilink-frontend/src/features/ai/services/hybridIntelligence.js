@@ -137,7 +137,7 @@ export async function recommendFromMarketplace(payload) {
     ok: true,
     data: {
       summary: items.length
-        ? `Ranked ${items.length} active marketplace listing(s) from the connected API against your produce and location preferences. This is deterministic ranking, not an NVIDIA response.`
+        ? `Ranked ${items.length} active marketplace listing(s) from the connected API against your produce and location preferences. This is deterministic ranking, not a provider-generated ranking.`
         : 'No active marketplace listings matched these preferences. No example recommendations were substituted.',
       categories: [],
       items,
@@ -372,7 +372,7 @@ export async function adviseFromMarketObservations(payload) {
       factors: [...facts, ...trends],
       recommendedActions: [],
       aiInterpretation: aiResponse.ok ? aiResponse.data.summary : null,
-      aiStatus: aiResponse.ok ? (aiProvider?.toLowerCase() === 'nvidia' ? 'connected' : 'provider-unverified') : aiResponse.code,
+      aiStatus: aiResponse.ok ? 'connected' : aiResponse.code,
       aiProvider,
       evidence: summaries,
       source: 'verified AgriLink market-data API',
@@ -418,7 +418,7 @@ export async function adviseFromVerifiedPrices(payload) {
         'This is an observed range, not an AI forecast or a guarantee of your achievable price.',
       ],
       aiExplanation: aiResponse.ok ? aiResponse.data.factors ?? [] : [],
-      aiStatus: aiResponse.ok ? (aiProvider?.toLowerCase() === 'nvidia' ? 'connected' : 'provider-unverified') : aiResponse.code,
+      aiStatus: aiResponse.ok ? 'connected' : aiResponse.code,
       aiProvider,
       evidence: group.comparable,
       currency: group.currency,

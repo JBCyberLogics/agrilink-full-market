@@ -80,6 +80,10 @@ const indexes: IndexDefinition[] = [
   { collection: 'announcements', key: { status: 1, createdAt: -1 } },
   { collection: 'aiusage', key: { user: 1, createdAt: -1 } },
   { collection: 'aiusage', key: { capability: 1, status: 1, createdAt: -1 } },
+  { collection: 'aiusage', key: { provider: 1, createdAt: -1 } },
+  { collection: 'aiusage', key: { capability: 1, provider: 1, createdAt: -1 } },
+  { collection: 'aiconversations', key: { user: 1, updatedAt: -1 } },
+  { collection: 'aimessages', key: { conversation: 1, createdAt: 1 } },
   { collection: 'adminroles', key: { name: 1 }, options: { name: 'adminroles_name_unique_ci', unique: true, partialFilterExpression: partialString('name'), collation: { locale: 'en', strength: 2 } } },
 ];
 

@@ -1,7 +1,7 @@
 import type { CurrentAdministrator } from '../../../contracts/api';
 
 export type LoginCredentials = {
-  username: string;
+  identity: string;
   password: string;
 };
 

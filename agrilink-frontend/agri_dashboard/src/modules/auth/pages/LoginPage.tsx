@@ -12,12 +12,10 @@ export function LoginPage({
   theme,
   onToggleTheme,
   onAuthenticated,
-  onDevelopmentPreview,
 }: {
   theme: Theme;
   onToggleTheme: () => void;
   onAuthenticated: () => void;
-  onDevelopmentPreview?: () => void;
 }) {
   const { status } = useAuth();
 
@@ -25,7 +23,7 @@ export function LoginPage({
     <MotionConfig reducedMotion="user">
       <main className="auth-page">
         <a className="auth-skip-link" href="#admin-username">Skip to sign in</a>
-        <LoginBrandPanel onDevelopmentPreview={onDevelopmentPreview} />
+        <LoginBrandPanel />
         <section className="auth-panel" aria-labelledby="login-title">
           <div className="auth-panel__topline">
             <img className="auth-panel__mobile-logo" src={logoUrl} alt="AgriLink Control" />

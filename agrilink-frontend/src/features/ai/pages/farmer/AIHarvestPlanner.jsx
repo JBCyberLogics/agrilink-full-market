@@ -89,7 +89,7 @@ export default function AIHarvestPlanner() {
             AI Harvest and Selling Planner
           </h2>
           <p className="mt-1 text-xs text-farmer-muted">
-            Build a date-based logistics checklist locally. Optional NVIDIA commentary is available through the authenticated AgriLink proxy.
+            Build a date-based logistics checklist locally. Optional provider commentary is available through the authenticated AgriLink proxy.
           </p>
         </section>
         <form onSubmit={submit} noValidate className="space-y-5">
@@ -274,7 +274,7 @@ return (
       </section>
     )}
     <section className="rounded-xl border border-farmer-line bg-paper p-5 sm:p-6">
-      <div className="flex items-start gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-farmer-surface text-farmer-brand"><Sparkles size={17} aria-hidden="true" /></span><div><h2 className="text-sm font-bold text-farmer-ink">NVIDIA planning guidance</h2><p className="mt-1 text-xs leading-relaxed text-farmer-muted">The deterministic schedule above remains the source for dates and quantities. An AI response can add contextual guidance but cannot predict crop readiness without trusted agronomy data.</p></div></div>
+      <div className="flex items-start gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-farmer-surface text-farmer-brand"><Sparkles size={17} aria-hidden="true" /></span><div><h2 className="text-sm font-bold text-farmer-ink">AI planning guidance</h2><p className="mt-1 text-xs leading-relaxed text-farmer-muted">The deterministic schedule above remains the source for dates and quantities. An AI response can add contextual guidance but cannot predict crop readiness without trusted agronomy data.</p></div></div>
       <label className="mt-4 block"><span className="mb-1.5 block text-xs font-medium text-farmer-ink">Question about this schedule (optional)</span><input value={question} onChange={(event) => setQuestion(event.target.value)} className="w-full rounded-lg border border-farmer-line bg-paper px-3 py-2.5 text-sm text-farmer-ink focus:border-farmer-brand/50 focus:outline-none focus:ring-2 focus:ring-farmer-brand/20" placeholder="What should I confirm before harvest?" /></label>
       {ai.error && <p className="mt-3 rounded-lg bg-danger-wash p-3 text-xs text-farmer-danger" role="alert">{ai.error}</p>}
       {ai.data?.timeline && <p className="mt-3 rounded-lg bg-farmer-page p-3 text-sm leading-relaxed text-farmer-ink" role="status">{ai.data.timeline}</p>}

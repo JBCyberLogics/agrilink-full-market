@@ -1,12 +1,16 @@
 /** The shared API client is the only browser route to the AI provider. */
 import { API_BASE, API_BASE_CONFIGURED } from '../services/api/client.js'
 const configuredProxy = API_BASE_CONFIGURED ? `${API_BASE}/ai` : ''
-const configuredStatusEndpoint = API_BASE_CONFIGURED ? '/admin/ai/diagnostics' : ''
+// Provider diagnostics require Admin RBAC and are initiated in AgriLink Control.
+// The Farmer/Buyer application must never call the administrator diagnostic route.
+const configuredStatusEndpoint = ''
 
 export const AI_CONFIG = Object.freeze({
   proxyUrl: configuredProxy.replace(/\/$/, ''),
   statusEndpoint: configuredStatusEndpoint,
-  timeoutMs: 30_000,
+  // Backend provider requests may be configured for up to 120 seconds.
+  // Leave time for the backend to return its own provider-specific result.
+  timeoutMs: 125_000,
   maxConversationTurns: 12,
   maxMessageLength: 4_000,
   // The backend selects the provider. The browser never chooses a vendor model.

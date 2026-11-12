@@ -1,5 +1,5 @@
 import { Types } from 'mongoose';
-import { Category, Product, User } from '../database/models.js';
+import { Category, FarmerProfile, Product, User } from '../database/models.js';
 import { normalizeRole } from '../common/identity.js';
 import { HttpError } from '../common/http.js';
 
@@ -66,6 +66,11 @@ export async function productToApi(input: any) {
   const stock = stockOf(product);
   const status = typeof product.status === 'string' ? product.status.toLowerCase() : null;
   const sellerName = seller ? seller.fullName ?? seller.name ?? null : null;
+  const farmerProfile: any = sellerId ? await FarmerProfile.findOne({ user: sellerId }).select('privacyPreferences').lean() : null;
+  const privacy = farmerProfile?.privacyPreferences ?? {};
+  const exposeName = privacy.showSellerName !== false;
+  const exposeLocation = privacy.showLocation !== false;
+  const exposeContact = privacy.shareContactInformation === true;
   const available = productIsAvailable(product) && priceCents !== null && stock !== null && stock > 0;
   return {
     _id: String(product._id), id: String(product._id),
@@ -85,11 +90,11 @@ export async function productToApi(input: any) {
     isAvailableForSale: available,
     images: Array.isArray(product.images) ? product.images : product.image ? [product.image] : [],
     image: Array.isArray(product.images) ? (product.images[0] ?? null) : product.image ?? null,
-    farmer: seller ? { _id: idText(seller), id: idText(seller), fullName: sellerName, verified: seller.isVerified === true || seller.verificationStatus === 'verified' } : null,
-    seller: seller ? { _id: idText(seller), id: idText(seller), fullName: sellerName, verified: seller.isVerified === true || seller.verificationStatus === 'verified' } : null,
+    farmer: seller ? { _id: idText(seller), id: idText(seller), fullName: exposeName ? sellerName : null, verified: seller.isVerified === true || seller.verificationStatus === 'verified', ...(exposeContact ? { contactInformation: { email: seller.email ?? null, phone: seller.phone ?? null } } : {}) } : null,
+    seller: seller ? { _id: idText(seller), id: idText(seller), fullName: exposeName ? sellerName : null, verified: seller.isVerified === true || seller.verificationStatus === 'verified', ...(exposeContact ? { contactInformation: { email: seller.email ?? null, phone: seller.phone ?? null } } : {}) } : null,
     sellerId: seller ? idText(seller) : sellerId ? idText(sellerId) : null,
-    location: product.marketLocation ?? product.town ?? product.county ?? seller?.county ?? null,
-    county: product.county ?? seller?.county ?? null,
+    location: exposeLocation ? product.marketLocation ?? product.town ?? product.county ?? seller?.county ?? null : null,
+    county: exposeLocation ? product.county ?? seller?.county ?? null : null,
     createdAt: product.createdAt ?? null, updatedAt: product.updatedAt ?? null,
   };
 }

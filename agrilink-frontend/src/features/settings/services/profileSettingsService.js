@@ -32,16 +32,38 @@ export async function readExtendedProfile() {
   }
 }
 
-export async function createExtendedProfile(role, profile) {
+const defaultPrivacyPreferences = { showSellerName: true, showLocation: true, shareContactInformation: false }
+export async function readPrivacyPreferences() {
+  const result = await readExtendedProfile()
+  const saved = result.profile?.privacyPreferences ?? {}
+  return { configured: Object.keys(saved).length > 0, preferences: { ...defaultPrivacyPreferences, ...saved } }
+}
+
+export async function savePrivacyPreferences(preferences) {
+  const result = await updateExtendedProfile({ privacyPreferences: preferences })
+  const profile = unwrap(result)
+  return { ...defaultPrivacyPreferences, ...(profile?.privacyPreferences ?? preferences) }
+}
+
+export async function readAccountPreferences() {
+  const result = await request('/users/account-preferences')
+  return { configured: result?.configured === true, preferences: result?.preferences ?? { defaultListingUnit: null } }
+}
+
+export async function saveAccountPreferences(preferences) {
+  return request('/users/account-preferences', { method: 'PATCH', body: preferences })
+}
+
+export async function createExtendedProfile(profile) {
   const result = await request(requirePath(profileEndpoint, 'Profile persistence'), {
-    method: 'POST', body: { role, profile },
+    method: 'POST', body: { profile },
   })
   return unwrap(result)
 }
 
-export async function updateExtendedProfile(role, profile) {
+export async function updateExtendedProfile(profile) {
   const result = await request(requirePath(profileEndpoint, 'Profile persistence'), {
-    method: 'PATCH', body: { role, profile },
+    method: 'PATCH', body: { profile },
   })
   return unwrap(result)
 }

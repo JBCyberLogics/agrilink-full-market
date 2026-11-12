@@ -264,10 +264,10 @@ export function AuthArea({ user, onSignIn, onSignOut, mobile = false, booting = 
     return (
       <div className={mobile ? 'flex items-center gap-2' : 'ml-1 flex items-center gap-2'}>
         <span
-          className={`grid h-10 w-10 shrink-0 place-items-center rounded-full bg-gradient-to-br from-primary to-primary-dark font-display text-sm font-bold text-white ${user.role === 'Farmer' ? 'ring-2 ring-secondary ring-offset-2' : ''}`}
-          aria-hidden="true"
+          className={`grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-full bg-gradient-to-br from-primary to-primary-dark font-display text-sm font-bold text-white ${user.role === 'Farmer' ? 'ring-2 ring-secondary ring-offset-2' : ''}`}
+          aria-label={user.image ? `${displayName} profile picture` : `${displayName} account avatar`}
         >
-          {getUserInitials(user)}
+          {user.image ? <img src={user.image} alt="" className="h-full w-full object-cover" /> : getUserInitials(user)}
         </span>
         {!mobile && (
           <span className="hidden leading-tight xl:block min-[1440px]:hidden">

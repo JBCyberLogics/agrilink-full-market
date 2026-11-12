@@ -45,3 +45,22 @@ export function validateProfileDraft(role, draft) {
   if (role === 'Buyer' && draft.buyerType === 'business' && !draft.organizationName.trim()) errors.organizationName = 'Enter the business or organization name.'
   return errors
 }
+
+const FARMER_PROFILE_PATCH_FIELDS = Object.freeze(Object.keys(FARMER_PROFILE_FIELDS).filter((key) => !['firstName', 'lastName', 'profilePicture'].includes(key)))
+const BUYER_PROFILE_PATCH_FIELDS = Object.freeze(Object.keys(BUYER_PROFILE_FIELDS).filter((key) => !['firstName', 'lastName', 'profilePicture'].includes(key)))
+
+/** Build a PATCH from editable role-profile fields only, preserving untouched server values. */
+export function buildProfilePatch(role, draft, snapshot) {
+  const allowed = role === 'Farmer' ? FARMER_PROFILE_PATCH_FIELDS : BUYER_PROFILE_PATCH_FIELDS
+  const patch = {}
+  for (const key of allowed) {
+    if (JSON.stringify(draft?.[key]) === JSON.stringify(snapshot?.[key])) continue
+    if (key === 'farmSize' || key === 'farmingExperienceYears') {
+      const value = draft?.[key]
+      patch[key] = value === '' || value == null ? null : Number(value)
+    } else {
+      patch[key] = draft?.[key]
+    }
+  }
+  return patch
+}

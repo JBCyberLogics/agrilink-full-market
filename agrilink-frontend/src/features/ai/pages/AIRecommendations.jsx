@@ -103,7 +103,7 @@ export default function AIRecommendations({ userRole }) {
             AI Recommendations Center
           </h2>
           <p className="mt-1 text-xs text-farmer-muted">
-            Rank active listings relevant to your role ({form.role || 'Buyer'}) using the authenticated marketplace feed. The recommendation score is deterministic; NVIDIA explanations require a secure proxy.
+            Rank active listings relevant to your role ({form.role || 'Buyer'}) using the authenticated marketplace feed. The recommendation score is deterministic; optional provider explanations use the secure AgriLink gateway.
           </p>
         </section>
         <form onSubmit={submit} noValidate className="space-y-5">
@@ -289,8 +289,8 @@ return (
       <div className="flex items-start gap-3">
         <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-farmer-surface text-farmer-brand"><Sparkles size={17} aria-hidden="true" /></span>
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-bold text-farmer-ink">NVIDIA explanation</h2>
-          <p className="mt-1 text-xs leading-relaxed text-farmer-muted">The local algorithm owns listing selection and ranking. NVIDIA may explain the returned shortlist without changing its scores.</p>
+          <h2 className="text-sm font-bold text-farmer-ink">AI provider explanation</h2>
+          <p className="mt-1 text-xs leading-relaxed text-farmer-muted">The local algorithm owns listing selection and ranking. A configured provider may explain the returned shortlist without changing its scores.</p>
         </div>
       </div>
       {ai.error && <p className="mt-3 rounded-lg bg-danger-wash p-3 text-xs text-farmer-danger" role="alert">{ai.error}</p>}

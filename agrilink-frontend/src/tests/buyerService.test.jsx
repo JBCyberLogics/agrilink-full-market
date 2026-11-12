@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const purchaseApi = vi.hoisted(() => ({ list: vi.fn(), create: vi.fn(), cancel: vi.fn() }))
+const usersApi = vi.hoisted(() => ({ myProfile: vi.fn() }))
 vi.mock('../services/api/endpoints.js', () => ({
-  users: { myProfile: vi.fn() },
+  users: usersApi,
   purchaseRequests: purchaseApi,
   products: {}, categories: {}, favorites: {},
 }))
 vi.mock('../features/marketplace/services/marketplaceService.js', () => ({ savedListings: vi.fn().mockResolvedValue([]), toggleSaved: vi.fn() }))
-import { buyerCancelRequest, buyerCreateRequest, buyerRequests } from '../features/buyer/services/buyerService.js'
+import { buyerCancelRequest, buyerCreateRequest, buyerProfile, buyerRequests } from '../features/buyer/services/buyerService.js'
 
 describe('buyer purchase requests use the backend service contract', () => {
   beforeEach(() => vi.clearAllMocks())
@@ -27,5 +28,13 @@ describe('buyer purchase requests use the backend service contract', () => {
     purchaseApi.cancel.mockResolvedValue({ cancelled: true })
     await expect(buyerCancelRequest('request-test-fixture')).resolves.toEqual({ cancelled: true })
     expect(purchaseApi.cancel).toHaveBeenCalledWith('request-test-fixture')
+  })
+
+  it('uses the backend identity role and rejects an administrator as a buyer', async () => {
+    usersApi.myProfile.mockResolvedValue({ user: { id: 'buyer-test-fixture', fullName: 'Buyer', role: 'customer' } })
+    await expect(buyerProfile()).resolves.toMatchObject({ user: { id: 'buyer-test-fixture', name: 'Buyer', role: 'Buyer' } })
+
+    usersApi.myProfile.mockResolvedValue({ user: { id: 'admin-test-fixture', fullName: 'Administrator', role: 'admin' } })
+    await expect(buyerProfile()).rejects.toMatchObject({ status: 403, code: 'SESSION_REALM_MISMATCH' })
   })
 })

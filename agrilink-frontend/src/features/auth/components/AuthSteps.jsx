@@ -3,7 +3,7 @@
  *  - signup email OTP verification (+ resend)
  *  - 3-step password recovery (email → OTP → new password)
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
@@ -17,6 +17,7 @@ import {
   verifySignup,
   resendSignupOtp,
   forgotPassword,
+  resendForgotPasswordOtp,
   verifyResetOtp,
   resetPassword,
 } from "../services/authService";
@@ -151,6 +152,14 @@ export function ForgotPasswordStep({ initialEmail = "", onDone, onBack }) {
   const [pw, setPw] = useState({ newPassword: "", confirmPassword: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
+  const [resendCooldown, setResendCooldown] = useState(0);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return undefined;
+    const timer = window.setTimeout(() => setResendCooldown((seconds) => Math.max(0, seconds - 1)), 1000);
+    return () => window.clearTimeout(timer);
+  }, [resendCooldown]);
 
   const run = async (fn) => {
     setBusy(true);
@@ -174,6 +183,9 @@ export function ForgotPasswordStep({ initialEmail = "", onDone, onBack }) {
         if (!d.token)
           return setError("Could not start the reset. Please try again.");
         setToken(d.token);
+        setCode("");
+        setInfo("If this address can receive a recovery email, a code may arrive shortly. We do not confirm whether an account uses this address.");
+        setResendCooldown(30);
         setStage("otp");
       });
     }
@@ -187,14 +199,15 @@ export function ForgotPasswordStep({ initialEmail = "", onDone, onBack }) {
         if (!d.token)
           return setError("Could not verify the code. Please try again.");
         setToken(d.token);
+        setError("");
         setStage("reset");
       });
     }
     if (stage === "reset") {
       if (!token)
         return setError("Reset session expired. Please request a new code.");
-      if (pw.newPassword.length < 6)
-        return setError("Use at least 6 characters.");
+      if (pw.newPassword.length < 10)
+        return setError("Use at least 10 characters.");
       if (pw.newPassword !== pw.confirmPassword)
         return setError("Passwords don't match.");
       return run(async () => {
@@ -205,13 +218,30 @@ export function ForgotPasswordStep({ initialEmail = "", onDone, onBack }) {
     onDone(email);
   };
 
+  const resend = async () => {
+    if (!token || busy || resendCooldown > 0) return;
+    setBusy(true);
+    setError("");
+    setInfo("");
+    try {
+      const result = await resendForgotPasswordOtp(token);
+      if (result?.token) setToken(result.token);
+      setResendCooldown(30);
+      setInfo("If the recovery request is eligible and email is available, another code may arrive shortly.");
+    } catch (err) {
+      setError(err?.error || "The code could not be resent. Please try again later.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const titles = {
     email: [
       "Reset your password",
       "Enter your account email and we will send you a code.",
     ],
-    otp: ["Enter the code", `We sent a 6 digit code to ${email}.`],
-    reset: ["Choose a new password", "Use at least 6 characters."],
+    otp: ["Enter the code", "If this address can receive a recovery email, a code may arrive shortly."],
+    reset: ["Choose a new password", "Use at least 10 characters."],
     done: ["Password updated", "You can now sign in with your new password."],
   };
   const label = {
@@ -242,7 +272,10 @@ export function ForgotPasswordStep({ initialEmail = "", onDone, onBack }) {
         />
       )}
       {stage === "otp" && (
-        <OtpInput value={code} onChange={setCode} error={error} />
+        <>
+          <OtpInput value={code} onChange={setCode} error={error} />
+          <p role="status" aria-live="polite" className="text-xs text-muted">If no email arrives, check the address and try again. Recovery requests are handled without confirming whether an account exists.</p>
+        </>
       )}
       {stage === "reset" && (
         <>
@@ -271,6 +304,8 @@ export function ForgotPasswordStep({ initialEmail = "", onDone, onBack }) {
         </>
       )}
       <Msg>{error}</Msg>
+      {info && <p role="status" aria-live="polite" className="rounded-xl bg-primary-light/40 px-3 py-2 text-xs font-medium text-brand-deep">{info}</p>}
+      {stage === "otp" && <button type="button" onClick={resend} disabled={busy || resendCooldown > 0} className="w-full text-center text-xs font-semibold text-brand underline underline-offset-2 disabled:cursor-not-allowed disabled:opacity-50">{resendCooldown > 0 ? `Resend code in ${resendCooldown}s` : "Resend code"}</button>}
       <button type="submit" disabled={busy} className={btn}>
         {busy ? (
           <Loader2 size={17} className="animate-spin" aria-hidden="true" />

@@ -146,6 +146,7 @@ export default function ProductDetailModal({ product, open, onClose, onAddToCart
                   </>
                 )}
               </p>
+              {(product.sellerContact?.email || product.sellerContact?.phone) && <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted"><span className="font-semibold text-ink-3">Seller contact shared by farmer:</span>{product.sellerContact.email && <a className="underline underline-offset-2" href={`mailto:${product.sellerContact.email}`}>{product.sellerContact.email}</a>}{product.sellerContact.phone && <a className="underline underline-offset-2" href={`tel:${product.sellerContact.phone}`}>{product.sellerContact.phone}</a>}</div>}
             </div>
 
             <dl className="grid grid-cols-2 gap-2 rounded-xl border border-line bg-soft/40 p-3 text-xs">

@@ -5,30 +5,29 @@
  * views/orders/revenue. Status tones never rely on color alone: every chip
  * carries a text label.
  */
-import { useState } from 'react'
-import { Sprout, PackagePlus, Wheat, Carrot, Tractor, AlertCircle, RotateCw, ImagePlus, Loader2, X } from 'lucide-react'
-import { farmerUploadImage } from '../services/farmerService'
-import { farmerCreateListing, farmerDeleteListing } from '../services/farmerService'
+import { useEffect, useState } from 'react'
+import { Sprout, PackagePlus, AlertCircle, RotateCw, ImagePlus, Loader2, X, Pencil, Check, Eye, EyeOff } from 'lucide-react'
+import { farmerUploadImage, farmerAccountPreferences } from '../services/farmerService'
+import { farmerCreateListing, farmerDeleteListing, farmerUpdateListing, farmerToggleListingAvailability } from '../services/farmerService'
 import { kes, fmtDate } from '../../../utils/format'
 import Field, { FIELD_ICONS } from '../../../components/ui/Field'
 import EmptyState from '../../../components/feedback/EmptyState'
 import ConfirmDelete from '../../../components/ui/ConfirmDelete'
-import { CATEGORIES as CATEGORY_KEYS } from '../../../constants/index.js'
+import { marketCategories } from '../../marketplace/services/marketplaceService.js'
 import useFarmerListings from '../hooks/useFarmerListings'
 
-/* Category options for the listing form — imported from shared constants
-   so they stay in sync with the backend Listing model enum. Icons are
-   mapped locally for display only. */
-const CATEGORIES = CATEGORY_KEYS.map((id) => ({
-  id,
-  icon: id === 'Grains' ? Wheat : id === 'Fruits & Veg' ? Carrot : Tractor,
-}))
 const UNITS = ['kg', 'litre', 'bunch', 'tray', 'crate', 'bird', 'head', 'cob', 'jar']
 
 const selectCls =
   'h-12 w-full rounded-xl border border-line bg-paper px-3.5 text-sm text-ink shadow-sm outline-none transition-colors hover:border-line-strong focus:border-brand focus:ring-2 focus:ring-brand/20 aria-[invalid=true]:border-danger-line aria-[invalid=true]:ring-2 aria-[invalid=true]:ring-danger-line'
 
-function StatusChip({ stock }) {
+function StatusChip({ stock, available }) {
+  if (available === false) {
+    return <span className="inline-flex items-center rounded-full border border-farmer-line bg-farmer-page px-2.5 py-0.5 text-[11px] font-semibold text-farmer-muted">Paused</span>
+  }
+  if (stock == null || available == null) {
+    return <span className="inline-flex items-center rounded-full border border-farmer-line bg-farmer-page px-2.5 py-0.5 text-[11px] font-semibold text-farmer-muted">Availability unavailable</span>
+  }
   const low = stock > 0 && stock < 50
   const out = stock === 0
   const tone = out
@@ -40,6 +39,83 @@ function StatusChip({ stock }) {
     <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${tone}`}>
       {out ? 'Sold out' : low ? 'Low stock' : 'In stock'}
     </span>
+  )
+}
+
+function ListingRow({ listing, onUpdated, onDelete }) {
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [form, setForm] = useState({ name: listing.name ?? '', price: String(listing.price ?? ''), stock: String(listing.stock ?? '') })
+
+  const save = async (event) => {
+    event.preventDefault()
+    const name = form.name.trim()
+    const price = Number(form.price)
+    const stock = Number(form.stock)
+    if (name.length < 2 || !Number.isFinite(price) || price <= 0 || form.stock === '' || !Number.isFinite(stock) || stock < 0) {
+      setError('Enter a name, a positive price, and a non-negative available quantity.')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      const result = await farmerUpdateListing(listing.id, { name, price, stock })
+      onUpdated(result.listing)
+      setEditing(false)
+    } catch (failure) {
+      setError(failure?.error || 'Could not update this listing.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const toggleAvailability = async () => {
+    setSaving(true)
+    setError('')
+    try {
+      const result = await farmerToggleListingAvailability(listing.id)
+      onUpdated(result.listing)
+    } catch (failure) {
+      setError(failure?.error || 'Could not update listing availability.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <li className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3.5 first:pt-0 last:pb-0">
+      {listing.imageUrl ? (
+        <img src={listing.imageUrl} alt={`${listing.name} photo`} className="h-11 w-11 shrink-0 rounded-lg object-cover" loading="lazy" />
+      ) : (
+        <span aria-hidden="true" className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-farmer-page text-farmer-muted"><Sprout size={16} /></span>
+      )}
+      {editing ? (
+        <form onSubmit={save} className="grid min-w-0 flex-1 gap-2 sm:grid-cols-[minmax(8rem,1fr)_8rem_8rem_auto_auto]">
+          <label className="sr-only" htmlFor={`listing-name-${listing.id}`}>Listing name</label>
+          <input id={`listing-name-${listing.id}`} value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} className="h-9 min-w-0 rounded-lg border border-farmer-line bg-paper px-2.5 text-sm text-farmer-ink" />
+          <label className="sr-only" htmlFor={`listing-price-${listing.id}`}>Price per unit</label>
+          <input id={`listing-price-${listing.id}`} type="number" min="0.01" step="any" value={form.price} onChange={(event) => setForm((current) => ({ ...current, price: event.target.value }))} className="h-9 rounded-lg border border-farmer-line bg-paper px-2.5 text-sm text-farmer-ink" />
+          <label className="sr-only" htmlFor={`listing-stock-${listing.id}`}>Available quantity</label>
+          <input id={`listing-stock-${listing.id}`} type="number" min="0" step="any" value={form.stock} onChange={(event) => setForm((current) => ({ ...current, stock: event.target.value }))} className="h-9 rounded-lg border border-farmer-line bg-paper px-2.5 text-sm text-farmer-ink" />
+          <button type="submit" disabled={saving} className="inline-flex h-9 items-center justify-center gap-1 rounded-lg bg-farmer-primary px-3 text-xs font-semibold text-white disabled:opacity-50"><Check size={14} /> Save</button>
+          <button type="button" disabled={saving} onClick={() => { setEditing(false); setError('') }} className="inline-flex h-9 items-center justify-center rounded-lg border border-farmer-line px-3 text-xs font-semibold text-farmer-ink disabled:opacity-50">Cancel</button>
+        </form>
+      ) : (
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold text-farmer-ink">{listing.name}</p>
+          <p className="mt-0.5 text-xs text-farmer-muted">{listing.category ?? 'Category unavailable'} · {kes(listing.price)} / {listing.unit ?? 'unit unavailable'} · posted {fmtDate(listing.createdAt)}</p>
+        </div>
+      )}
+      {!editing && <>
+        <p className="text-[13px] tabular-nums text-farmer-ink">{listing.stock == null ? 'Quantity unavailable' : `${listing.stock.toLocaleString('en-KE')} ${listing.unit ?? ''}`}</p>
+        <StatusChip stock={listing.stock} available={listing.available} />
+        <button type="button" onClick={() => { setForm({ name: listing.name ?? '', price: String(listing.price ?? ''), stock: String(listing.stock ?? '') }); setEditing(true); setError('') }} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-farmer-line bg-paper px-3 text-xs font-semibold text-farmer-ink hover:border-farmer-brand/40 hover:text-farmer-brand"><Pencil size={13} /> Edit</button>
+        <button type="button" onClick={toggleAvailability} disabled={saving} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-farmer-line bg-paper px-3 text-xs font-semibold text-farmer-ink hover:border-farmer-brand/40 hover:text-farmer-brand disabled:opacity-50">{listing.available === false ? <Eye size={13} /> : <EyeOff size={13} />}{listing.available === false ? 'Publish' : 'Pause'}</button>
+        <ConfirmDelete label={`Delete ${listing.name} listing`} onConfirm={() => onDelete(listing.id)} />
+      </>}
+      {error && <p role="alert" className="basis-full text-xs text-farmer-danger">{error}</p>}
+    </li>
   )
 }
 
@@ -115,12 +191,29 @@ function PhotoPicker({ url, busy, error, onPick, onClear }) {
 
 /* --------------------------------------------------------------- form */
 function PostForm({ onSaved }) {
-  const [form, setForm] = useState({ name: '', category: '', price: '', unit: 'kg', stock: '' })
+  const [categoryState, setCategoryState] = useState({ status: 'loading', items: [] })
+  const [form, setForm] = useState({ name: '', category: '', description: '', location: '', price: '', unit: 'kg', stock: '' })
   const [photo, setPhoto] = useState({ url: '', busy: false, error: null }) // uploaded file (not local state of the listing)
   const [errors, setErrors] = useState({})
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [failed, setFailed] = useState(null)
+
+  const loadCategories = () => {
+    setCategoryState((current) => ({ ...current, status: 'loading' }))
+    marketCategories()
+      .then((items) => setCategoryState({ status: 'ready', items }))
+      .catch(() => setCategoryState({ status: 'error', items: [] }))
+  }
+  useEffect(() => { loadCategories() }, [])
+  useEffect(() => {
+    let active = true
+    farmerAccountPreferences().then((result) => {
+      const unit = result?.preferences?.defaultListingUnit
+      if (active && UNITS.includes(unit)) setForm((current) => ({ ...current, unit }))
+    }).catch(() => { /* the optional preference does not block listing creation */ })
+    return () => { active = false }
+  }, [])
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }))
 
@@ -156,9 +249,9 @@ function PostForm({ onSaved }) {
     if (form.name.trim().length < 3) next.name = 'Give your produce a clear name.'
     if (!form.category) next.category = 'Pick the closest category.'
     if (!form.price || Number(form.price) <= 0) next.price = 'Price must be greater than zero.'
-    if (form.stock === '' || Number(form.stock) < 0) next.stock = 'Enter the units you have.'
+    if (form.stock === '' || !Number.isFinite(Number(form.stock)) || Number(form.stock) <= 0) next.stock = 'Available quantity must be greater than zero.'
     setErrors(next)
-    if (Object.keys(next).length || photo.busy) return
+    if (Object.keys(next).length || photo.busy || categoryState.status !== 'ready' || categoryState.items.length === 0) return
 
     setSaving(true)
     setSaved(false)
@@ -167,13 +260,15 @@ function PostForm({ onSaved }) {
       const d = await farmerCreateListing({
         name: form.name.trim(),
         category: form.category,
+        description: form.description.trim(),
+        location: form.location.trim(),
         price: Number(form.price),
         unit: form.unit,
         stock: Number(form.stock),
         ...(photo.url ? { imageUrl: photo.url } : {}),
       })
       onSaved(d.listing)
-      setForm({ name: '', category: '', price: '', unit: 'kg', stock: '' })
+      setForm((current) => ({ name: '', category: '', description: '', location: '', price: '', unit: current.unit, stock: '' }))
       setPhoto({ url: '', busy: false, error: null })
       setSaved(true)
       setErrors({})
@@ -207,29 +302,33 @@ function PostForm({ onSaved }) {
             value={form.category}
             onChange={set('category')}
             aria-invalid={!!errors.category}
+            disabled={categoryState.status !== 'ready' || categoryState.items.length === 0}
             className={selectCls}
           >
-            <option value="">Select category…</option>
-            {CATEGORIES.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.id}
+            <option value="">{categoryState.status === 'loading' ? 'Loading categories…' : categoryState.status === 'error' ? 'Categories unavailable' : categoryState.items.length === 0 ? 'No active categories' : 'Select category…'}</option>
+            {categoryState.items.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
               </option>
             ))}
           </select>
           {errors.category && <p className="mt-1.5 text-xs font-medium text-farmer-danger">{errors.category}</p>}
+          {categoryState.status === 'error' && <div className="mt-1.5 flex items-center gap-2 text-xs text-farmer-danger"><span>Active categories could not be loaded.</span><button type="button" className="font-semibold underline" onClick={loadCategories}>Retry</button></div>}
+          {categoryState.status === 'ready' && categoryState.items.length === 0 && <p className="mt-1.5 text-xs text-farmer-muted">No active produce categories are configured, so a listing cannot be created yet.</p>}
         </div>
         <Field
           id="produce-price"
           label="Price per unit (KSh)"
           type="number"
-          min="0"
-          step="1"
+          min="0.01"
+          step="any"
           placeholder="e.g. 120"
           icon={FIELD_ICONS.money}
           value={form.price}
           onChange={set('price')}
           error={errors.price}
         />
+        <Field id="produce-location" label="Pickup / farm location" placeholder="Town or county" value={form.location} onChange={set('location')} error={errors.location} />
         <div>
           <label htmlFor="produce-unit" className="mb-1.5 block text-[13px] font-semibold text-ink-3">
             Unit
@@ -246,14 +345,15 @@ function PostForm({ onSaved }) {
           id="produce-stock"
           label="Available stock"
           type="number"
-          min="0"
-          step="1"
+          min="0.01"
+          step="any"
           placeholder="e.g. 500"
           icon={FIELD_ICONS.stock}
           value={form.stock}
           onChange={set('stock')}
           error={errors.stock}
         />
+        <label className="block sm:col-span-2" htmlFor="produce-description"><span className="mb-1.5 block text-[13px] font-semibold text-ink-3">Description</span><textarea id="produce-description" value={form.description} onChange={set('description')} maxLength={3000} rows={3} className={`${selectCls} h-auto py-3`} placeholder="Describe the produce, quality, or pickup details" /></label>
         <PhotoPicker
           url={photo.url}
           busy={photo.busy}
@@ -274,7 +374,7 @@ function PostForm({ onSaved }) {
 
       <button
         type="submit"
-        disabled={saving}
+        disabled={saving || categoryState.status !== 'ready' || categoryState.items.length === 0}
         className={`inline-flex h-11 items-center gap-2 rounded-lg px-5 text-sm font-semibold text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-farmer-brand/40 focus-visible:ring-offset-2 ${
           saving ? 'cursor-wait bg-farmer-primary/70' : 'bg-farmer-primary hover:bg-farmer-primary-hover'
         }`}
@@ -353,35 +453,13 @@ export default function MyProduce() {
           </EmptyState>
         ) : (
           <ul className="divide-y divide-farmer-line">
-            {current.map((l) => (
-              <li key={l.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3.5 first:pt-0 last:pb-0">
-                {l.imageUrl ? (
-                  <img
-                    src={l.imageUrl}
-                    alt={`${l.name} photo`}
-                    className="h-11 w-11 shrink-0 rounded-lg object-cover"
-                    loading="lazy"
-                  />
-                ) : (
-                  <span
-                    aria-hidden="true"
-                    className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-farmer-page text-farmer-muted"
-                  >
-                    <Sprout size={16} />
-                  </span>
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-farmer-ink">{l.name}</p>
-                  <p className="mt-0.5 text-xs text-farmer-muted">
-                    {l.category} · {kes(l.price)} / {l.unit} · posted {fmtDate(l.createdAt)}
-                  </p>
-                </div>
-                <p className="text-[13px] tabular-nums text-farmer-ink">
-                  {l.stock.toLocaleString('en-KE')} {l.unit}
-                </p>
-                <StatusChip stock={l.stock} />
-                <ConfirmDelete label={`Delete ${l.name} listing`} onConfirm={() => removed(l.id)} />
-              </li>
+            {current.map((listing) => (
+              <ListingRow
+                key={listing.id}
+                listing={listing}
+                onUpdated={(updated) => setRows((previous) => (previous ?? current).map((row) => row.id === updated.id ? updated : row))}
+                onDelete={removed}
+              />
             ))}
           </ul>
         )}

@@ -16,11 +16,11 @@ const formEntrance = {
 };
 
 export function LoginForm({ onAuthenticated }: { onAuthenticated: () => void }) {
-  const { login, status } = useAuth();
-  const usernameRef = useRef<HTMLInputElement>(null);
-  const [username, setUsername] = useState('');
+  const { login } = useAuth();
+  const identityRef = useRef<HTMLInputElement>(null);
+  const [identity, setIdentity] = useState('');
   const [password, setPassword] = useState('');
-  const [errors, setErrors] = useState<{ username?: string; password?: string }>({});
+  const [errors, setErrors] = useState<{ identity?: string; password?: string }>({});
   const [feedback, setFeedback] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -28,33 +28,32 @@ export function LoginForm({ onAuthenticated }: { onAuthenticated: () => void }) 
     event.preventDefault();
     setFeedback(null);
 
-    const nextErrors = validateLoginCredentials({ username, password });
+    const nextErrors = validateLoginCredentials({ identity, password });
     setErrors(nextErrors);
 
     if (Object.keys(nextErrors).length) {
-      if (nextErrors.username) usernameRef.current?.focus();
+      if (nextErrors.identity) identityRef.current?.focus();
       else document.getElementById('admin-password')?.focus();
       return;
     }
 
-    const backendConfigured = status !== 'not-configured';
-    if (backendConfigured) setSubmitting(true);
+    setSubmitting(true);
     try {
-      const result = await login({ username: username.trim(), password });
+      const result = await login({ identity: identity.trim(), password });
       if (result.status === 'authenticated') {
         onAuthenticated();
       } else if (result.status === 'not-configured') {
         setFeedback('Administrator sign-in is not connected yet.');
       } else if (result.status === 'rejected') {
         setPassword('');
-        setFeedback('Sign-in failed. Check your details and try again.');
+        setFeedback('Unable to sign in with those credentials. Please check your details and try again.');
       } else {
-        setFeedback('Unable to sign in right now. Try again.');
+        setFeedback('Unable to sign in with those credentials. Please check your details and try again.');
       }
     } catch {
-      setFeedback('Unable to sign in right now. Try again.');
+      setFeedback('Unable to sign in with those credentials. Please check your details and try again.');
     } finally {
-      if (backendConfigured) setSubmitting(false);
+      setSubmitting(false);
     }
   }
 
@@ -69,11 +68,11 @@ export function LoginForm({ onAuthenticated }: { onAuthenticated: () => void }) 
       variants={formEntrance}
     >
       <motion.div className="auth-field" variants={fieldEntrance}>
-        <label htmlFor="admin-username">Username</label>
-        <div className={`auth-input-wrap${errors.username ? ' auth-input-wrap--invalid' : ''}`}>
+        <label htmlFor="admin-username">Administrator email or username</label>
+        <div className={`auth-input-wrap${errors.identity ? ' auth-input-wrap--invalid' : ''}`}>
           <UserRound className="auth-input-icon" size={18} strokeWidth={1.8} aria-hidden="true" />
           <input
-            ref={usernameRef}
+            ref={identityRef}
             id="admin-username"
             name="username"
             type="text"
@@ -81,18 +80,18 @@ export function LoginForm({ onAuthenticated }: { onAuthenticated: () => void }) 
             inputMode="text"
             autoCapitalize="none"
             spellCheck={false}
-            placeholder="Your administrator username"
-            value={username}
+            placeholder="Email address or username"
+            value={identity}
             onChange={(event) => {
-              setUsername(event.target.value);
-              if (errors.username) setErrors((current) => ({ ...current, username: undefined }));
+              setIdentity(event.target.value);
+              if (errors.identity) setErrors((current) => ({ ...current, identity: undefined }));
             }}
-            aria-invalid={Boolean(errors.username)}
-            aria-describedby={errors.username ? 'admin-username-error' : undefined}
+            aria-invalid={Boolean(errors.identity)}
+            aria-describedby={errors.identity ? 'admin-username-error' : undefined}
             disabled={submitting}
           />
         </div>
-        {errors.username && <span className="auth-field-error" id="admin-username-error">{errors.username}</span>}
+        {errors.identity && <span className="auth-field-error" id="admin-username-error">{errors.identity}</span>}
       </motion.div>
 
       <motion.div className="auth-field" variants={fieldEntrance}>

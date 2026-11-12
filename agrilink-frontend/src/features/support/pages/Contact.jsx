@@ -10,6 +10,7 @@
 import { useRef, useState } from 'react'
 import { Mail, Sprout, ShoppingBag, Wrench, CircleAlert, RotateCw, ArrowRight } from 'lucide-react'
 import Field, { FIELD_ICONS } from '../../../components/ui/Field'
+import { contactMessages } from '../../../services/api/endpoints.js'
 
 const SUPPORT_EMAIL = 'agrilinkkenya@agrilink.co.ke'
 const USER_TYPES = ['Farmer', 'Buyer', 'Other']
@@ -42,13 +43,15 @@ export default function ContactPage({ onOpenAuth = () => {} }) {
     message: '',
   })
   const [errors, setErrors] = useState({})
-  const [status, setStatus] = useState('idle') // 'idle' | 'unavailable'
+  const [status, setStatus] = useState('idle') // idle | submitting | sent | unavailable | error
+  const [submitError, setSubmitError] = useState('')
 
   const set = (key) => (e) => {
     setForm((f) => ({ ...f, [key]: e.target.value }))
     /* clear a field's error while the user fixes it */
     setErrors((errs) => (errs[key] ? { ...errs, [key]: undefined } : errs))
-    if (status === 'unavailable') setStatus('idle')
+    if (status !== 'idle') setStatus('idle')
+    setSubmitError('')
   }
 
   const validate = () => {
@@ -62,21 +65,38 @@ export default function ContactPage({ onOpenAuth = () => {} }) {
     return errs
   }
 
-  const onSubmit = (e) => {
+  const onSubmit = async (e) => {
     e.preventDefault()
     const errs = validate()
     setErrors(errs)
     if (Object.keys(errs).length > 0) return
-    /* No messaging service is configured in this build — say so plainly
-       (there is deliberately no "sending" spinner, because nothing goes
-       anywhere). The typed message stays in the form so it isn't lost. */
-    setStatus('unavailable')
+    setStatus('submitting')
+    setSubmitError('')
+    try {
+      await contactMessages.create({
+        name: form.name.trim(),
+        email: form.email.trim(),
+        subject: (form.subject.trim() || `${form.category} · ${form.userType}`).slice(0, 200),
+        message: form.message.trim(),
+        category: form.category,
+        userType: form.userType,
+      })
+      setForm((current) => ({ ...current, name: '', email: '', subject: '', message: '' }))
+      setStatus('sent')
+    } catch (error) {
+      if (error?.code === 'API_BASE_NOT_CONFIGURED' || error?.status === 0) setStatus('unavailable')
+      else {
+        setSubmitError(error?.error || 'Your message could not be submitted. Please try again.')
+        setStatus('error')
+      }
+    }
   }
 
   const pickCategory = (category) => (e) => {
     e.preventDefault()
     setForm((f) => ({ ...f, category }))
     setStatus('idle')
+    setSubmitError('')
     focusForm(formRef)
   }
 
@@ -205,15 +225,22 @@ export default function ContactPage({ onOpenAuth = () => {} }) {
               Fields marked * are required.
             </p>
 
-            {status === 'unavailable' && (
+            {status === 'sent' && (
+              <div role="status" className="mt-4 rounded-xl border border-brand/20 bg-primary-soft px-4 py-3 text-[13px] leading-relaxed text-brand-deep">
+                Your message was received and recorded for the support team. You can contact support again if you need to add more details.
+              </div>
+            )}
+
+            {(status === 'unavailable' || status === 'error') && (
               <div
                 role="alert"
                 className="mt-4 flex items-start gap-2.5 rounded-xl border border-brand/20 bg-primary-soft px-4 py-3"
               >
                 <CircleAlert size={16} aria-hidden="true" className="mt-0.5 shrink-0 text-brand-deep" />
                 <p className="text-[13px] leading-relaxed text-brand-deep">
-                  Message delivery isn't connected yet, so nothing was sent and nothing will be
-                  lost, your message is still here to copy. You can also email us directly at{' '}
+                  {status === 'unavailable'
+                    ? 'The support service is unavailable, so this message was not submitted. Your message remains in the form. You can also email us directly at '
+                    : `${submitError} Your message remains in the form. You can also email us directly at `}
                   <a href={`mailto:${SUPPORT_EMAIL}`} className="font-semibold underline">
                     {SUPPORT_EMAIL}
                   </a>
@@ -336,13 +363,13 @@ export default function ContactPage({ onOpenAuth = () => {} }) {
               <div className="sm:col-span-2">
                 <button
                   type="submit"
+                  disabled={status === 'submitting'}
                   className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-white shadow-lift transition-all hover:bg-primary-dark active:scale-[0.98] sm:w-auto sm:px-8"
                 >
-                  Send message
+                  {status === 'submitting' ? <><RotateCw size={15} className="animate-spin" aria-hidden="true" /> Sending…</> : status === 'sent' ? 'Send another message' : 'Send message'}
                 </button>
                 <p className="mt-2 text-xs text-muted-2">
-                  Submission needs a messaging service, which isn't configured yet, the form will
-                  tell you honestly after validation.
+                  Submissions are recorded for the support team. Email replies depend on the configured delivery service.
                 </p>
               </div>
             </form>

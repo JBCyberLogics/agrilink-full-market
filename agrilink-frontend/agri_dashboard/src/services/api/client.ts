@@ -26,6 +26,7 @@ export class AdminApiClient {
   private readonly baseUrl: string;
   private readonly fetcher: typeof fetch;
   private readonly credentials: RequestCredentials;
+  private refreshPromise?: Promise<boolean>;
 
   constructor(options: { baseUrl: string; fetcher?: typeof fetch; credentials?: RequestCredentials }) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
@@ -65,20 +66,35 @@ export class AdminApiClient {
       const token = await this.getCsrfToken();
       if (token) headers.set('X-CSRF-Token', token);
     }
+    const url = `${this.baseUrl}${options.path}`;
+    const send = () => this.fetcher.call(globalThis, url, {
+      method,
+      credentials: this.credentials,
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: controller.signal,
+    });
+    const readPayload = async (response: Response): Promise<unknown> => {
+      const contentType = response.headers.get('content-type') ?? '';
+      return contentType.includes('application/json') ? response.json() : response.text();
+    };
     let response: Response | undefined;
 
     try {
-      response = await this.fetcher(`${this.baseUrl}${options.path}`, {
-        method,
-        credentials: this.credentials,
-        headers,
-        body: options.body === undefined ? undefined : JSON.stringify(options.body),
-        signal: controller.signal,
-      });
-      const contentType = response.headers.get('content-type') ?? '';
-      const payload: unknown = contentType.includes('application/json') ? await response.json() : await response.text();
+      response = await send();
+      let payload = await readPayload(response);
+      const noRefreshPaths = new Set(['/auth/admin/login', '/auth/admin/logout', '/auth/admin/refresh-token', '/auth/admin/csrf']);
+      if (response.status === 401 && !noRefreshPaths.has(pathOnly)) {
+        if (await this.refreshAdminSession()) {
+          response = await send();
+          payload = await readPayload(response);
+        } else {
+          this.notifySessionExpired();
+        }
+      }
       if (!response.ok) {
         const error = typeof payload === 'object' && payload !== null ? payload as Record<string, unknown> : {};
+        if (error.code === 'SESSION_REALM_MISMATCH') this.notifySessionExpired();
         throw new AdminApiError(
           typeof error.message === 'string' ? error.message : `Admin API request failed (${response.status}).`,
           response.status,
@@ -104,19 +120,59 @@ export class AdminApiClient {
   private csrfPromise?: Promise<string>;
   private readCsrfCookie() {
     if (typeof document === 'undefined') return '';
-    const value = document.cookie.split('; ').find((entry) => entry.startsWith('agrilink.csrf='))?.slice('agrilink.csrf='.length);
+    const name = 'agrilink.admin.csrf';
+    const value = document.cookie.split('; ').find((entry) => entry.startsWith(`${name}=`))?.slice(name.length + 1);
     try { return value ? decodeURIComponent(value) : ''; } catch { return ''; }
   }
   private async getCsrfToken() {
     const current = this.readCsrfCookie();
     if (current) return current;
     if (!this.csrfPromise) {
-      this.csrfPromise = this.fetcher(`${this.baseUrl}/auth/csrf`, { credentials: this.credentials, headers: { Accept: 'application/json' } })
-        .then(() => this.readCsrfCookie())
+      this.csrfPromise = this.fetcher.call(globalThis, `${this.baseUrl}/auth/admin/csrf`, { credentials: this.credentials, headers: { Accept: 'application/json' } })
+        .then(async (response) => {
+          try {
+            const payload = await response.json();
+            const token = payload && typeof payload === 'object' && 'data' in payload
+              ? (payload as { data?: { csrfToken?: string } }).data?.csrfToken
+              : (payload as { csrfToken?: string } | undefined)?.csrfToken;
+            if (typeof token === 'string' && token.length > 0) return token;
+          } catch { /* fall through to cookie read below */ }
+          return this.readCsrfCookie();
+        })
         .catch(() => '')
         .finally(() => { this.csrfPromise = undefined; });
     }
     return this.csrfPromise;
+  }
+
+  private notifySessionExpired() {
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('agrilink:admin-session-expired'));
+  }
+
+  private refreshAdminSession(): Promise<boolean> {
+    if (!this.refreshPromise) {
+      this.refreshPromise = (async () => {
+        const controller = new AbortController();
+        const timeout = globalThis.setTimeout(() => controller.abort(), 12_000);
+        try {
+          const csrf = await this.getCsrfToken();
+          if (!csrf) return false;
+          const response = await this.fetcher.call(globalThis, `${this.baseUrl}/auth/admin/refresh-token`, {
+            method: 'POST',
+            credentials: this.credentials,
+            headers: { Accept: 'application/json', 'X-CSRF-Token': csrf },
+            signal: controller.signal,
+          });
+          const payload = await response.json().catch(() => null);
+          return Boolean(response.ok && payload?.success && payload?.data?.administrator?.id);
+        } catch {
+          return false;
+        } finally {
+          globalThis.clearTimeout(timeout);
+        }
+      })().finally(() => { this.refreshPromise = undefined; });
+    }
+    return this.refreshPromise;
   }
 }
 

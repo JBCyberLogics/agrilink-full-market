@@ -26,7 +26,9 @@ const STUBS = {
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {})
-  vi.stubGlobal('fetch', vi.fn(async (url) => STUBS[url] ?? STUBS.default))
+  vi.stubGlobal('fetch', vi.fn(async (url) => String(url).endsWith('/faq')
+    ? { ok: true, status: 200, json: async () => ({ success: true, data: FAQ_ITEMS }) }
+    : STUBS[String(url)] ?? STUBS.default))
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   document.documentElement.classList.remove('dark')
 })
@@ -40,23 +42,42 @@ afterEach(() => {
 const questionTrigger = (text) =>
   screen.getByRole('button', { name: new RegExp(text, 'i') })
 
+const renderFAQ = async () => {
+  render(<FAQ />)
+  await waitFor(() => expect(screen.getByText(FAQ_ITEMS[0].question)).toBeDefined())
+}
+
 describe('FAQ page — content and layout', () => {
-  it('renders the heading, intro and a labeled search field', () => {
+  it('shows an honest empty state when the backend has no published FAQs', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ success: true, data: [] }) })))
     render(<FAQ />)
+    expect(await screen.findByText('No answers have been published')).toBeDefined()
+    expect(screen.queryByText(FAQ_ITEMS[0].question)).toBeNull()
+  })
+
+  it('shows an unavailable state when loading from the backend fails', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 503, json: async () => ({ message: 'Unavailable' }) })))
+    render(<FAQ />)
+    expect(await screen.findByText('FAQ content could not be loaded')).toBeDefined()
+    expect(screen.getByRole('button', { name: /retry/i })).toBeDefined()
+  })
+
+  it('renders the heading, intro and a labeled search field', async () => {
+    await renderFAQ()
     expect(screen.getByRole('heading', { name: /frequently asked questions/i })).toBeDefined()
     expect(screen.getByText(/farmers and buyers/i)).toBeDefined()
     expect(screen.getByLabelText('Search the FAQ')).toBeDefined()
   })
 
-  it('shows every defined question by default', () => {
-    render(<FAQ />)
+  it('shows every defined question by default', async () => {
+    await renderFAQ()
     expect(screen.getAllByText(FAQ_ITEMS[0].question).length).toBeGreaterThan(0)
     expect(screen.getAllByText(FAQ_ITEMS[FAQ_ITEMS.length - 1].question).length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: 'All Questions' }).getAttribute('aria-pressed')).toBe('true')
   })
 
-  it('exposes all defined categories as chips', () => {
-    render(<FAQ />)
+  it('exposes all defined categories as chips', async () => {
+    await renderFAQ()
     for (const cat of FAQ_CATEGORIES) {
       expect(screen.getByRole('button', { name: cat })).toBeDefined()
     }
@@ -64,40 +85,40 @@ describe('FAQ page — content and layout', () => {
 })
 
 describe('FAQ page — search and category filters', () => {
-  it('search matches questions live', () => {
-    render(<FAQ />)
+  it('search matches questions live', async () => {
+    await renderFAQ()
     fireEvent.change(screen.getByLabelText('Search the FAQ'), { target: { value: 'cart' } })
     expect(screen.getAllByText(/add produce to my cart/i).length).toBeGreaterThan(0)
     expect(screen.queryByText(/what is agrilink/i)).toBeNull()
     expect(screen.getByText(/1 question matching your filters/i)).toBeDefined()
   })
 
-  it('search also hits answer text, not just titles', () => {
-    render(<FAQ />)
+  it('search also hits answer text, not just titles', async () => {
+    await renderFAQ()
     /* "cookie" only appears inside the account answer */
     fireEvent.change(screen.getByLabelText('Search the FAQ'), { target: { value: 'cookie' } })
     expect(screen.getAllByText(/access my account/i).length).toBeGreaterThan(0)
     expect(screen.queryByText(/what is agrilink/i)).toBeNull()
   })
 
-  it('category chips filter the list independently', () => {
-    render(<FAQ />)
+  it('category chips filter the list independently', async () => {
+    await renderFAQ()
     fireEvent.click(screen.getByRole('button', { name: 'Farmer Accounts' }))
     expect(screen.getAllByText(/start selling produce/i).length).toBeGreaterThan(0)
     expect(screen.queryByText(/what is agrilink/i)).toBeNull()
     expect(screen.getByRole('button', { name: 'Farmer Accounts' }).getAttribute('aria-pressed')).toBe('true')
   })
 
-  it('search combines with the selected category', () => {
-    render(<FAQ />)
+  it('search combines with the selected category', async () => {
+    await renderFAQ()
     fireEvent.click(screen.getByRole('button', { name: 'Account and Security' }))
     fireEvent.change(screen.getByLabelText('Search the FAQ'), { target: { value: 'appearance' } })
     expect(screen.getAllByText(/change the appearance/i).length).toBeGreaterThan(0)
     expect(screen.getByText(/1 question matching your filters/i)).toBeDefined()
   })
 
-  it('shows an honest empty state and the Clear action restores everything', () => {
-    render(<FAQ />)
+  it('shows an honest empty state and the Clear action restores everything', async () => {
+    await renderFAQ()
     fireEvent.click(screen.getByRole('button', { name: 'Getting Started' }))
     fireEvent.change(screen.getByLabelText('Search the FAQ'), { target: { value: 'appearance cookie' } })
     expect(screen.getByText(/no matching questions/i)).toBeDefined()
@@ -108,8 +129,8 @@ describe('FAQ page — search and category filters', () => {
 })
 
 describe('FAQ page — accessible accordion', () => {
-  it('click expands answers with proper ARIA wiring; multiple may stay open', () => {
-    render(<FAQ />)
+  it('click expands answers with proper ARIA wiring; multiple may stay open', async () => {
+    await renderFAQ()
     const trigger = questionTrigger('what is agrilink\\?')
     expect(trigger.getAttribute('aria-expanded')).toBe('false')
     const panelId = trigger.getAttribute('aria-controls')
@@ -131,8 +152,8 @@ describe('FAQ page — accessible accordion', () => {
     expect(other.getAttribute('aria-expanded')).toBe('false')
   })
 
-  it('Enter and Space keys activate a question', () => {
-    render(<FAQ />)
+  it('Enter and Space keys activate a question', async () => {
+    await renderFAQ()
     const trigger = questionTrigger('who can use agrilink')
     trigger.focus()
     fireEvent.keyDown(trigger, { key: 'Enter' })
@@ -143,8 +164,8 @@ describe('FAQ page — accessible accordion', () => {
 })
 
 describe('FAQ page — support links', () => {
-  it('links to real destinations through the hash router', () => {
-    render(<FAQ />)
+  it('links to real destinations through the hash router', async () => {
+    await renderFAQ()
     expect(screen.getByRole('link', { name: /contact us/i }).getAttribute('href')).toBe('#/contact')
     expect(screen.getByRole('link', { name: /start selling/i }).getAttribute('href')).toBe('#/start-selling')
     expect(screen.getByRole('link', { name: /how it works/i }).getAttribute('href')).toBe('#/how-it-works')

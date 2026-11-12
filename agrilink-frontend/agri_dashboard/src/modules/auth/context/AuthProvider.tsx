@@ -42,11 +42,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const localSignOut = () => { setSession(null); setStatus(authService.integrationStatus === 'NOT_CONFIGURED' ? 'not-configured' : 'unauthenticated'); };
-    const onStorage = (event: StorageEvent) => { if (event.key === 'agrilink.session-event' && event.newValue) localSignOut(); };
+    const onAdminSessionExpired = () => localSignOut();
+    const onStorage = (event: StorageEvent) => { if (event.key === 'agrilink.admin.session-event' && event.newValue) localSignOut(); };
     let channel: BroadcastChannel | undefined;
-    try { channel = new BroadcastChannel('agrilink.session'); channel.onmessage = (event) => { if (event.data?.type === 'signed-out') localSignOut(); }; } catch { /* cross-tab sync may not be available */ }
+    try { channel = new BroadcastChannel('agrilink.admin.session'); channel.onmessage = (event) => { if (event.data?.type === 'signed-out') localSignOut(); }; } catch { /* cross-tab sync may not be available */ }
     window.addEventListener('storage', onStorage);
-    return () => { window.removeEventListener('storage', onStorage); channel?.close(); };
+    window.addEventListener('agrilink:admin-session-expired', onAdminSessionExpired);
+    return () => { window.removeEventListener('storage', onStorage); window.removeEventListener('agrilink:admin-session-expired', onAdminSessionExpired); channel?.close(); };
   }, []);
 
   const login = useCallback(async (credentials: LoginCredentials) => {

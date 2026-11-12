@@ -20,13 +20,14 @@ const userSchema = loose({
   isDeleted: { type: Boolean, default: false },
   isEmailVerified: { type: Boolean, default: false },
   notificationPreferences: Schema.Types.Mixed,
+  accountPreferences: Schema.Types.Mixed,
   image: String,
   phone: String,
   county: String,
 });
 export const User = modelFor('AgriLinkUser', userSchema, 'users');
 
-export const FarmerProfile = modelFor('AgriLinkFarmerProfile', loose({ user: Schema.Types.ObjectId }), 'farmerprofiles');
+export const FarmerProfile = modelFor('AgriLinkFarmerProfile', loose({ user: Schema.Types.ObjectId, privacyPreferences: Schema.Types.Mixed }), 'farmerprofiles');
 export const BuyerProfile = modelFor('AgriLinkBuyerProfile', loose({ user: Schema.Types.ObjectId }), 'buyerprofiles');
 export const Farm = modelFor('AgriLinkFarm', loose({ farmer: Schema.Types.ObjectId, isActive: Boolean }), 'farms');
 export const Product = modelFor('AgriLinkProduct', loose({
@@ -71,6 +72,7 @@ export const Otp = modelFor('AgriLinkOtp', loose({
   sentTo: String, purpose: String, otp: { type: String, select: false },
   otpHash: { type: String, select: false }, tokenHash: { type: String, select: false },
   registrationData: { type: Schema.Types.Mixed, select: false }, expiresAt: Date, status: String,
+  attempts: Number, resendAttempts: Number, resendInProgress: Boolean, resendStartedAt: Date,
 }), 'otps');
 export const PurchaseRequest = modelFor('AgriLinkPurchaseRequest', loose({ buyer: Schema.Types.ObjectId, status: String }), 'purchaserequests');
 export const Announcement = modelFor('AgriLinkAnnouncement', loose({ author: Schema.Types.ObjectId, status: String }), 'announcements');

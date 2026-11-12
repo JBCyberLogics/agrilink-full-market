@@ -4,7 +4,17 @@
  * Backend roles: seller → Farmer, customer → Buyer, admin roles → Admin.
  */
 import { auth, users, otp } from '../../../services/api/endpoints.js'
-import { announceSessionEnded, tokens } from '../../../services/api/client.js'
+import { announceSessionChanged, announceSessionEnded, tokens } from '../../../services/api/client.js'
+
+const GENERIC_LOGIN_ERROR = 'Unable to sign in with those credentials. Please check your details and try again.'
+const ROLE_MISMATCH_CODES = new Set(['ACCOUNT_ROLE_MISMATCH', 'SESSION_REALM_MISMATCH'])
+
+function isRoleMismatchError(error) {
+  const publicMessage = `${error?.error ?? ''} ${error?.message ?? ''}`
+  return ROLE_MISMATCH_CODES.has(error?.code)
+    || error?.field === 'role'
+    || /account.{0,40}registered as|account role mismatch|selected (account )?role/i.test(publicMessage)
+}
 
 export const toBackendRole = (role) =>
   String(role ?? '').trim().toLowerCase() === 'farmer' ? 'seller' : 'customer'
@@ -77,19 +87,23 @@ export async function login({ email, password, role }) {
   try {
     data = await auth.login({ email, password, ...(role ? { role: toBackendRole(role) } : {}) })
   } catch (error) {
-    const accountRole = error?.details?.details?.accountRole
-    if (error?.field === 'role' && accountRole) throw { ...error, accountRole }
+    /* Normalize legacy role-specific responses at the authentication
+       boundary. Do not pass account role or backend detail to either login UI. */
+    if (error?.status === 401 || isRoleMismatchError(error)) {
+      throw { status: 401, code: 'INVALID_CREDENTIALS', error: GENERIC_LOGIN_ERROR }
+    }
     throw error
   }
   const user = normalizeUser(data)
-  if (role && user?.role && user.role !== 'Admin' && user.role !== role) {
+  if (role && user?.role && user.role !== role) {
     tokens.clear()
     throw {
-      status: 403,
-      field: 'role',
-      error: `Sorry ${user.role}. Try again.`,
+      status: 401,
+      code: 'INVALID_CREDENTIALS',
+      error: GENERIC_LOGIN_ERROR,
     }
   }
+  announceSessionChanged()
   return user
 }
 
@@ -125,9 +139,15 @@ export const pickToken = (d) =>
   d?.data?.token ??
   (typeof d === 'string' ? d : null)
 
-export const forgotPassword = async (email) => ({
-  token: pickToken(await auth.forgotPasswordOtp(email)),
-})
+export async function forgotPassword(email) {
+  const result = await auth.forgotPasswordOtp(email)
+  return { token: result?.challengeId ?? pickToken(result) }
+}
+
+export async function resendForgotPasswordOtp(token) {
+  const result = await auth.forgotPasswordOtpResend(token)
+  return { token: result?.challengeId ?? token }
+}
 
 export const verifyResetOtp = async (token, code) => ({
   token: pickToken(await auth.forgotPasswordOtpMatch(token, code)) ?? token,
